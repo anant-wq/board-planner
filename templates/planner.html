@@ -121,8 +121,11 @@ async function loadView(view) {
     }
 
     let data;
+    // Always ensure deckle data is loaded (needed for cross-view selection)
+    if (!deckleData) await fetchDeckleJobs();
+
     if (view === 'deckle') {
-        data = deckleData || await fetchDeckleJobs();
+        data = deckleData;
     } else {
         data = clientData || await fetchClientJobs();
     }
@@ -250,6 +253,11 @@ function toggleJob(checkbox) {
     const bpro = checkbox.value;
     if (checkbox.checked) {
         selectedJobs.add(bpro);
+        // In client view, also select all jobs at the same deckle
+        if (currentView === 'client' && deckleData) {
+            const jobDeckle = findJobDeckle(bpro);
+            if (jobDeckle) selectEntireDeckle(jobDeckle, true);
+        }
     } else {
         selectedJobs.delete(bpro);
     }
@@ -257,6 +265,41 @@ function toggleJob(checkbox) {
     updatePlanCount();
     updateGroupCheckboxes();
     updateBreadcrumbSelection();
+    // Re-render in client view to show newly selected rows
+    if (currentView === 'client' && clientData) {
+        renderGroups(clientData.groups, 'client');
+    }
+}
+
+function findJobDeckle(bpro) {
+    if (!deckleData) return null;
+    for (const group of deckleData.groups) {
+        for (const job of group.jobs) {
+            if (job.bpro === bpro) return group.deckle;
+        }
+    }
+    // Also check client data for deckle field
+    if (clientData) {
+        for (const group of clientData.groups) {
+            for (const job of group.jobs) {
+                if (job.bpro === bpro) return job.deckle;
+            }
+        }
+    }
+    return null;
+}
+
+function selectEntireDeckle(deckle, checked) {
+    if (!deckleData) return;
+    for (const group of deckleData.groups) {
+        if (group.deckle === deckle) {
+            for (const job of group.jobs) {
+                if (checked) selectedJobs.add(job.bpro);
+                else selectedJobs.delete(job.bpro);
+            }
+            break;
+        }
+    }
 }
 
 function toggleGroup(checkbox, groupKey, view) {
@@ -266,11 +309,19 @@ function toggleGroup(checkbox, groupKey, view) {
     );
     if (!group) return;
 
-    for (const job of group.jobs) {
-        if (checkbox.checked) {
-            selectedJobs.add(job.bpro);
-        } else {
-            selectedJobs.delete(job.bpro);
+    if (view === 'client' && checkbox.checked && deckleData) {
+        // In client view, selecting a group should select all jobs at matching deckles
+        const deckles = new Set(group.jobs.map(j => j.deckle).filter(Boolean));
+        for (const d of deckles) {
+            selectEntireDeckle(d, true);
+        }
+    } else {
+        for (const job of group.jobs) {
+            if (checkbox.checked) {
+                selectedJobs.add(job.bpro);
+            } else {
+                selectedJobs.delete(job.bpro);
+            }
         }
     }
     updatePlanCount();
@@ -487,11 +538,15 @@ function renderSelection(container) {
 
     const sortedDeckles = Object.keys(grouped).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
 
-    // Breadcrumbs
+    // Breadcrumbs with checkboxes
     const bc = document.getElementById('breadcrumbs');
     let bcHtml = '';
     for (const d of sortedDeckles) {
-        bcHtml += `<a class="bc-chip" href="#" onclick="scrollToGroup('sel_${d}', event)">${d === 'N/A' ? 'N/A' : d + '"'} <span class="bc-count">${grouped[d].length}</span></a>`;
+        const label = d === 'N/A' ? 'N/A' : d + '"';
+        bcHtml += `<label class="bc-chip bc-check" onclick="event.stopPropagation()">
+            <input type="checkbox" checked onchange="toggleSelBreadcrumb(this, '${d}')">
+            ${label} <span class="bc-count">${grouped[d].length}</span>
+        </label>`;
     }
     bc.innerHTML = bcHtml;
 
@@ -540,6 +595,12 @@ function removeSelJob(bpro) {
     selectedJobs.delete(bpro);
     updatePlanCount();
     renderSelection(document.getElementById('groups-container'));
+}
+
+function toggleSelBreadcrumb(checkbox, deckle) {
+    if (!checkbox.checked) {
+        removeSelGroup(deckle);
+    }
 }
 
 function removeSelGroup(deckle) {

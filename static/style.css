@@ -125,6 +125,8 @@ nav {
 .btn-del { background: #dc3545; }
 .btn-del:hover { background: #c82333; }
 .btn-xs { padding: 2px 8px; font-size: 0.75rem; border-radius: 3px; }
+.bc-check { cursor: pointer; }
+.bc-check input[type="checkbox"] { margin-right: 4px; vertical-align: middle; cursor: pointer; }
 
 /* Breadcrumbs */
 .breadcrumbs {
