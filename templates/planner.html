@@ -55,6 +55,7 @@
 <script>
 // ---- State ----
 const selectedJobs = new Set();
+const selectionReasons = {};  // deckle -> "selected via CUSTOMER" reason
 let deckleData = null;
 let clientData = null;
 let historyData = null;
@@ -256,7 +257,11 @@ function toggleJob(checkbox) {
         // In client view, also select all jobs at the same deckle
         if (currentView === 'client' && deckleData) {
             const jobDeckle = findJobDeckle(bpro);
-            if (jobDeckle) selectEntireDeckle(jobDeckle, true);
+            const customer = findJobCustomer(bpro);
+            if (jobDeckle) {
+                selectEntireDeckle(jobDeckle, true);
+                selectionReasons[jobDeckle] = customer || 'Client View';
+            }
         }
     } else {
         selectedJobs.delete(bpro);
@@ -269,6 +274,24 @@ function toggleJob(checkbox) {
     if (currentView === 'client' && clientData) {
         renderGroups(clientData.groups, 'client');
     }
+}
+
+function findJobCustomer(bpro) {
+    if (clientData) {
+        for (const group of clientData.groups) {
+            for (const job of group.jobs) {
+                if (job.bpro === bpro) return group.client;
+            }
+        }
+    }
+    if (deckleData) {
+        for (const group of deckleData.groups) {
+            for (const job of group.jobs) {
+                if (job.bpro === bpro) return job.customer || '';
+            }
+        }
+    }
+    return '';
 }
 
 function findJobDeckle(bpro) {
@@ -314,6 +337,7 @@ function toggleGroup(checkbox, groupKey, view) {
         const deckles = new Set(group.jobs.map(j => j.deckle).filter(Boolean));
         for (const d of deckles) {
             selectEntireDeckle(d, true);
+            selectionReasons[d] = groupKey;  // groupKey is the client name
         }
     } else {
         for (const job of group.jobs) {
@@ -331,6 +355,7 @@ function toggleGroup(checkbox, groupKey, view) {
 
 function clearSelection() {
     selectedJobs.clear();
+    Object.keys(selectionReasons).forEach(k => delete selectionReasons[k]);
     updatePlanCount();
     const data = currentView === 'deckle' ? deckleData : clientData;
     if (data) renderGroups(data.groups, currentView);
@@ -538,14 +563,15 @@ function renderSelection(container) {
 
     const sortedDeckles = Object.keys(grouped).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
 
-    // Breadcrumbs with checkboxes
+    // Breadcrumbs with checkboxes and reasons
     const bc = document.getElementById('breadcrumbs');
     let bcHtml = '';
     for (const d of sortedDeckles) {
         const label = d === 'N/A' ? 'N/A' : d + '"';
+        const reason = selectionReasons[d] ? ` (${selectionReasons[d]})` : '';
         bcHtml += `<label class="bc-chip bc-check" onclick="event.stopPropagation()">
             <input type="checkbox" checked onchange="toggleSelBreadcrumb(this, '${d}')">
-            ${label} <span class="bc-count">${grouped[d].length}</span>
+            ${label}${reason} <span class="bc-count">${grouped[d].length}</span>
         </label>`;
     }
     bc.innerHTML = bcHtml;
@@ -559,9 +585,10 @@ function renderSelection(container) {
         totalQty += groupQty;
 
         const groupId = 'group-sel_' + d.replace(/[^a-zA-Z0-9]/g, '_');
+        const reason = selectionReasons[d] ? ` (selected via ${selectionReasons[d]})` : '';
         html += `<details class="deckle-group" open id="${groupId}">
             <summary class="group-header">
-                <span class="group-title">${d === 'N/A' ? 'No Deckle' : 'Deckle ' + d + '"'}</span>
+                <span class="group-title">${d === 'N/A' ? 'No Deckle' : 'Deckle ' + d + '"'}${reason}</span>
                 <span class="group-meta">${jobs.length} jobs &middot; ${formatQty(groupQty)} pcs</span>
                 <button class="btn btn-del btn-xs" onclick="event.stopPropagation(); removeSelGroup('${d}')">Remove</button>
             </summary>
@@ -611,6 +638,7 @@ function removeSelGroup(deckle) {
             break;
         }
     }
+    delete selectionReasons[deckle];
     updatePlanCount();
     renderSelection(document.getElementById('groups-container'));
 }
