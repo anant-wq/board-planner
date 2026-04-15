@@ -23,6 +23,8 @@
     <div class="view-switcher">
         <button class="view-btn active" data-view="deckle" onclick="switchView('deckle')">Deckle View</button>
         <button class="view-btn" data-view="client" onclick="switchView('client')">Client View</button>
+        <button class="view-btn" data-view="history" onclick="switchView('history')">90 Day History</button>
+        <button class="view-btn" data-view="selection" onclick="switchView('selection')">Current Selection</button>
     </div>
     <input type="text" id="search" class="search-input" placeholder="Search BPRO, customer, item..." oninput="filterJobs()">
     <button class="btn btn-sm" onclick="refreshData()">Refresh</button>
@@ -55,6 +57,7 @@
 const selectedJobs = new Set();
 let deckleData = null;
 let clientData = null;
+let historyData = null;
 let currentView = 'deckle';
 
 // Set default date to today
@@ -73,10 +76,17 @@ async function fetchClientJobs() {
     return clientData;
 }
 
+async function fetchHistory() {
+    const res = await fetch('{{ url_for("api_history") }}');
+    historyData = await res.json();
+    return historyData;
+}
+
 async function refreshData() {
     await fetch('{{ url_for("api_refresh") }}');
     deckleData = null;
     clientData = null;
+    historyData = null;
     await loadView(currentView);
 }
 
@@ -93,6 +103,22 @@ function switchView(view) {
 async function loadView(view) {
     const container = document.getElementById('groups-container');
     container.innerHTML = '<p class="loading">Loading...</p>';
+    const bc = document.getElementById('breadcrumbs');
+
+    if (view === 'selection') {
+        renderSelection(container);
+        bc.innerHTML = '';
+        return;
+    }
+
+    if (view === 'history') {
+        const data = historyData || await fetchHistory();
+        document.getElementById('total-jobs').textContent = data.total;
+        document.getElementById('total-groups').textContent = '—';
+        renderHistory(container, data);
+        bc.innerHTML = '';
+        return;
+    }
 
     let data;
     if (view === 'deckle') {
@@ -362,6 +388,170 @@ function scrollToGroup(groupKey, event) {
         el.open = true;
         el.scrollIntoView({behavior: 'smooth', block: 'start'});
     }
+}
+
+// ---- History View ----
+function renderHistory(container, data) {
+    const search = document.getElementById('search').value.toLowerCase();
+    let items = data.items || [];
+    if (search) {
+        items = items.filter(it =>
+            (it.bpro + it.board_item + it.item_name + it.customer + it.running_name + it.deckle + it.paper)
+                .toLowerCase().includes(search)
+        );
+    }
+
+    // Group by deckle for breadcrumbs
+    const deckleGroups = {};
+    for (const it of items) {
+        if (!deckleGroups[it.deckle]) deckleGroups[it.deckle] = [];
+        deckleGroups[it.deckle].push(it);
+    }
+
+    // Render breadcrumbs
+    const bc = document.getElementById('breadcrumbs');
+    let bcHtml = '';
+    const sortedDeckles = Object.keys(deckleGroups).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
+    for (const d of sortedDeckles) {
+        bcHtml += `<a class="bc-chip" href="#" onclick="scrollToGroup('hist_${d}', event)">${d}" <span class="bc-count">${deckleGroups[d].length}</span></a>`;
+    }
+    bc.innerHTML = bcHtml;
+
+    // Render grouped tables
+    let html = '';
+    for (const d of sortedDeckles) {
+        const groupItems = deckleGroups[d];
+        const groupId = 'group-hist_' + d.replace(/[^a-zA-Z0-9]/g, '_');
+        html += `<details class="deckle-group" id="${groupId}">
+            <summary class="group-header">
+                <span class="group-title">Deckle ${d}"</span>
+                <span class="group-meta">${groupItems.length} boards produced in last 90 days</span>
+            </summary>
+            <div class="group-body"><table>
+                <thead><tr>
+                    <th>BPRO</th><th>Board Item</th><th>Paper Config</th>
+                    <th>Customer</th><th>Running Name</th>
+                    <th>Runs</th><th>Total Qty</th><th>Avg Qty</th><th>Last Run</th>
+                </tr></thead><tbody>`;
+        for (const it of groupItems) {
+            html += `<tr>
+                <td class="mono">${it.bpro}</td>
+                <td class="td-item">${it.board_item}</td>
+                <td class="td-paper"><code>${it.paper}</code></td>
+                <td>${it.customer}</td>
+                <td>${it.running_name}</td>
+                <td class="td-qty">${it.runs}</td>
+                <td class="td-qty">${formatQty(it.total_qty)}</td>
+                <td class="td-qty">${formatQty(it.avg_qty)}</td>
+                <td>${it.last_run}</td>
+            </tr>`;
+        }
+        html += '</tbody></table></div></details>';
+    }
+
+    document.getElementById('total-groups').textContent = sortedDeckles.length;
+    container.innerHTML = html || '<p class="empty-state">No history found.</p>';
+}
+
+// ---- Current Selection View ----
+function renderSelection(container) {
+    if (selectedJobs.size === 0) {
+        document.getElementById('total-jobs').textContent = '0';
+        document.getElementById('total-groups').textContent = '0';
+        container.innerHTML = '<p class="empty-state">No jobs selected. Go to Deckle or Client view to select jobs.</p>';
+        return;
+    }
+
+    // Gather selected job details from deckle data
+    if (!deckleData) {
+        container.innerHTML = '<p class="loading">Load Deckle View first to see selection details.</p>';
+        return;
+    }
+
+    const selJobs = [];
+    for (const group of deckleData.groups) {
+        for (const job of group.jobs) {
+            if (selectedJobs.has(job.bpro)) {
+                selJobs.push({...job, deckle: group.deckle});
+            }
+        }
+    }
+
+    // Group by deckle
+    const grouped = {};
+    for (const j of selJobs) {
+        const d = j.deckle || 'N/A';
+        if (!grouped[d]) grouped[d] = [];
+        grouped[d].push(j);
+    }
+
+    const sortedDeckles = Object.keys(grouped).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
+
+    // Breadcrumbs
+    const bc = document.getElementById('breadcrumbs');
+    let bcHtml = '';
+    for (const d of sortedDeckles) {
+        bcHtml += `<a class="bc-chip" href="#" onclick="scrollToGroup('sel_${d}', event)">${d === 'N/A' ? 'N/A' : d + '"'} <span class="bc-count">${grouped[d].length}</span></a>`;
+    }
+    bc.innerHTML = bcHtml;
+
+    let totalQty = 0;
+    let html = '';
+    for (const d of sortedDeckles) {
+        const jobs = grouped[d];
+        let groupQty = 0;
+        for (const j of jobs) { try { groupQty += parseInt(j.qty) || 0; } catch(e) {} }
+        totalQty += groupQty;
+
+        const groupId = 'group-sel_' + d.replace(/[^a-zA-Z0-9]/g, '_');
+        html += `<details class="deckle-group" open id="${groupId}">
+            <summary class="group-header">
+                <span class="group-title">${d === 'N/A' ? 'No Deckle' : 'Deckle ' + d + '"'}</span>
+                <span class="group-meta">${jobs.length} jobs &middot; ${formatQty(groupQty)} pcs</span>
+                <button class="btn btn-del btn-xs" onclick="event.stopPropagation(); removeSelGroup('${d}')">Remove</button>
+            </summary>
+            <div class="group-body"><table>
+                <thead><tr>
+                    <th>BPRO</th><th>Board Item</th><th>IPRO</th>
+                    <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th>
+                    <th></th>
+                </tr></thead><tbody>`;
+        for (const j of jobs) {
+            html += `<tr>
+                <td class="mono">${j.bpro}</td>
+                <td class="td-item">${j.board_item}</td>
+                <td class="mono">${j.ipro}</td>
+                <td>${j.customer}</td>
+                <td>${j.running_name}</td>
+                <td class="td-qty">${j.qty}</td>
+                <td>${j.pro_date}</td>
+                <td><button class="btn btn-del btn-xs" onclick="removeSelJob('${j.bpro}')">x</button></td>
+            </tr>`;
+        }
+        html += '</tbody></table></div></details>';
+    }
+
+    document.getElementById('total-jobs').textContent = selJobs.length;
+    document.getElementById('total-groups').textContent = sortedDeckles.length;
+    container.innerHTML = html;
+}
+
+function removeSelJob(bpro) {
+    selectedJobs.delete(bpro);
+    updatePlanCount();
+    renderSelection(document.getElementById('groups-container'));
+}
+
+function removeSelGroup(deckle) {
+    if (!deckleData) return;
+    for (const group of deckleData.groups) {
+        if (group.deckle === deckle) {
+            for (const job of group.jobs) selectedJobs.delete(job.bpro);
+            break;
+        }
+    }
+    updatePlanCount();
+    renderSelection(document.getElementById('groups-container'));
 }
 
 // ---- Helpers ----

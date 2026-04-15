@@ -49,6 +49,8 @@ def _cached(key, fetcher):
 
 def clear_cache():
     _cache.clear()
+    import history_db
+    history_db.force_resync()
 
 
 # ---- Deckle-pivot Auto line ----
@@ -324,7 +326,45 @@ def _parse_history():
 
 
 def get_history():
-    return _cached("history", _parse_history)
+    """Get history, using SQLite cache (syncs from Sheets once per day)."""
+    import history_db
+    if history_db.needs_sync():
+        print("[history] Syncing from Google Sheets...")
+        parsed = _parse_history()
+        history_db.save_history(parsed)
+        _cache["history"] = {"data": parsed, "ts": time.time()}
+        return parsed
+    # Load from SQLite (or in-memory cache)
+    return _cached("history", history_db.load_history)
+
+
+def get_history_list():
+    """Return flat list of all BPROs produced in last 90 days with details."""
+    history = get_history()
+    bpro_master = get_bpro_master()
+
+    results = []
+    for deckle, bpros in history.items():
+        for bpro, entry in bpros.items():
+            master = bpro_master.get(bpro, {})
+            board_item = master.get("board_item", "")
+            results.append({
+                "bpro": bpro,
+                "deckle": deckle,
+                "board_item": board_item,
+                "item_name": master.get("item_name", entry.get("item_code", "")),
+                "customer": master.get("customer", ""),
+                "running_name": master.get("running_name", ""),
+                "paper": extract_paper(board_item),
+                "runs": entry["runs"],
+                "total_qty": entry["total_qty"],
+                "avg_qty": round(entry["total_qty"] / entry["runs"]) if entry["runs"] else 0,
+                "last_run": entry["last_run"].strftime("%d/%m/%Y"),
+            })
+
+    # Sort by last run date (most recent first)
+    results.sort(key=lambda x: x["last_run"], reverse=True)
+    return {"items": results, "total": len(results)}
 
 
 # ---- Deckle detail with 4 sections ----

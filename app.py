@@ -154,6 +154,16 @@ def detail_page():
     return render_template("detail.html", deckle=deckle, ref_bpro=ref_bpro)
 
 
+@app.route("/api/history")
+@login_required
+def api_history():
+    try:
+        data = sheets.get_history_list()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/refresh")
 @login_required
 def api_refresh():

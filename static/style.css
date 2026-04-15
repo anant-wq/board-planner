@@ -124,6 +124,7 @@ nav {
 .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
 .btn-del { background: #dc3545; }
 .btn-del:hover { background: #c82333; }
+.btn-xs { padding: 2px 8px; font-size: 0.75rem; border-radius: 3px; }
 
 /* Breadcrumbs */
 .breadcrumbs {
