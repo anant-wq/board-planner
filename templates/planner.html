@@ -767,7 +767,7 @@ function updateFlagCount() {
     }
 }
 
-function sendFlagEmail() {
+async function sendFlagEmail() {
     if (flaggedHistory.size === 0) {
         alert('No items flagged. Tick items in the 90-day history sections first.');
         return;
@@ -816,8 +816,34 @@ function sendFlagEmail() {
     body += `\nGenerated from Board Planner — ${window.location.origin}/board-planner/planner`;
 
     const subject = `BPRO Request: ${items.length} board(s) need production orders — ${planDate}`;
-    const mailto = `mailto:${encodeURIComponent(emails.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(mailto, '_blank');
+
+    // Send via server API
+    const btn = document.getElementById('email-flag-btn');
+    btn.textContent = 'Sending...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('{{ url_for("api_send_email") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({to: emails.trim(), subject, body})
+        });
+        const data = await res.json();
+
+        if (data.ok) {
+            alert(`Email sent successfully to ${emails.trim()}`);
+            flaggedHistory.clear();
+            // Re-render to uncheck all
+            if (currentView === 'selection') {
+                await renderSelection(document.getElementById('groups-container'));
+            }
+        } else {
+            alert('Failed to send: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Error sending email: ' + e.message);
+    }
+    updateFlagCount();
 }
 
 async function removeSelJob(bpro) {

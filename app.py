@@ -1,8 +1,11 @@
 import os
+import base64
 import secrets
 from datetime import timedelta
+from email.mime.text import MIMEText
 from functools import wraps
 
+import requests as http_requests
 from flask import (
     Flask, request, redirect, url_for, session,
     render_template, jsonify, flash
@@ -47,7 +50,7 @@ google = oauth.register(
     client_id=os.environ.get("GOOGLE_CLIENT_ID", ""),
     client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", ""),
     server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-    client_kwargs={"scope": "openid email profile"},
+    client_kwargs={"scope": "openid email profile https://www.googleapis.com/auth/gmail.send"},
 )
 
 
@@ -87,6 +90,7 @@ def auth_callback():
 
     session.permanent = True
     session["user"] = {"email": email, "name": user_info.get("name", email)}
+    session["google_token"] = token.get("access_token", "")
     return redirect(url_for("planner_page"))
 
 
@@ -209,6 +213,45 @@ def api_export_plan():
 
     csv_text = "\n".join(lines)
     return jsonify({"csv": csv_text, "job_count": len(jobs), "date": plan_date})
+
+
+@app.route("/api/send-email", methods=["POST"])
+@login_required
+def api_send_email():
+    body = request.get_json(force=True)
+    to_emails = body.get("to", "")
+    subject = body.get("subject", "")
+    email_body = body.get("body", "")
+
+    if not to_emails or not subject or not email_body:
+        return jsonify({"error": "Missing to, subject, or body"}), 400
+
+    access_token = session.get("google_token")
+    if not access_token:
+        return jsonify({"error": "Not authenticated with Gmail. Please logout and login again."}), 401
+
+    sender = session["user"]["email"]
+
+    # Build MIME message
+    msg = MIMEText(email_body)
+    msg["to"] = to_emails
+    msg["from"] = sender
+    msg["subject"] = subject
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+    # Send via Gmail API
+    resp = http_requests.post(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"raw": raw},
+    )
+
+    if resp.status_code == 200:
+        return jsonify({"ok": True, "message": f"Email sent to {to_emails}"})
+    else:
+        error_detail = resp.json().get("error", {}).get("message", resp.text)
+        return jsonify({"error": f"Gmail API error: {error_detail}"}), resp.status_code
 
 
 if __name__ == "__main__":
