@@ -147,7 +147,7 @@ function renderGroups(groups, view) {
                         <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th><th></th>
                         ` : `
                         <th>BPRO</th><th>Board Item</th><th>Item Name</th>
-                        <th>Running Name</th><th>Qty</th><th>Deckle</th><th>PRO Date</th><th>POC</th>
+                        <th>Running Name</th><th>Qty</th><th>Deckle</th><th>PRO Date</th><th>POC</th><th></th>
                         `}
                     </tr></thead>
                     <tbody>`;
@@ -177,6 +177,7 @@ function renderGroups(groups, view) {
                     <td class="td-qty">${job.deckle}</td>
                     <td>${job.pro_date}</td>
                     <td>${job.poc_name || ''}</td>
+                    <td><a href="/detail?deckle=${encodeURIComponent(job.deckle)}&ref_bpro=${encodeURIComponent(job.bpro)}" class="btn-detail" title="View deckle detail with paper analysis">Detail</a></td>
                 </tr>`;
             }
         }
