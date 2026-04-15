@@ -13,6 +13,10 @@
         <div class="value" id="total-groups">—</div>
     </div>
     <div class="card">
+        <div class="label">Total Pending Qty</div>
+        <div class="value" id="total-qty">—</div>
+    </div>
+    <div class="card">
         <div class="label">Selected</div>
         <div class="value" id="selected-count">0</div>
     </div>
@@ -115,6 +119,8 @@ async function loadView(view) {
         const data = historyData || await fetchHistory();
         document.getElementById('total-jobs').textContent = data.total;
         document.getElementById('total-groups').textContent = '—';
+        const histTotalQty = (data.items || []).reduce((s, it) => s + (it.total_qty || 0), 0);
+        document.getElementById('total-qty').textContent = formatQty(histTotalQty);
         renderHistory(container, data);
         bc.innerHTML = '';
         return;
@@ -132,6 +138,8 @@ async function loadView(view) {
 
     document.getElementById('total-jobs').textContent = data.total_jobs;
     document.getElementById('total-groups').textContent = data.groups.length;
+    const totalQty = data.groups.reduce((sum, g) => sum + (g.total_qty || 0), 0);
+    document.getElementById('total-qty').textContent = formatQty(totalQty);
     renderGroups(data.groups, view);
 }
 
@@ -533,6 +541,7 @@ async function renderSelection(container) {
     if (selectedJobs.size === 0) {
         document.getElementById('total-jobs').textContent = '0';
         document.getElementById('total-groups').textContent = '0';
+        document.getElementById('total-qty').textContent = '0';
         document.getElementById('breadcrumbs').innerHTML = '';
         container.innerHTML = '<p class="empty-state">No jobs selected. Go to Deckle or Client view to select jobs.</p>';
         return;
@@ -681,8 +690,10 @@ async function renderSelection(container) {
         html += '</div></details>';
     }
 
+    const selTotalQty = selJobs.reduce((s, j) => { try { return s + (parseInt(j.qty) || 0); } catch(e) { return s; } }, 0);
     document.getElementById('total-jobs').textContent = selJobs.length;
     document.getElementById('total-groups').textContent = sortedDeckles.length;
+    document.getElementById('total-qty').textContent = formatQty(selTotalQty);
     container.innerHTML = html;
 }
 
