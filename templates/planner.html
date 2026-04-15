@@ -32,6 +32,7 @@
     </div>
     <input type="text" id="search" class="search-input" placeholder="Search BPRO, customer, item..." oninput="filterJobs()">
     <button class="btn btn-sm" onclick="refreshData()">Refresh</button>
+    <button class="btn btn-del btn-sm" onclick="if(confirm('Clear all selections?')) clearSelection()">Reset All</button>
 </div>
 
 <!-- Breadcrumbs -->
