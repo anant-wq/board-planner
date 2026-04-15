@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Deckle {{ deckle }}" Detail — Board Planner{% endblock %}
+{% block content %}
+
+<div class="detail-header">
+    <a href="{{ url_for('planner_page') }}" class="btn btn-sm">&larr; Back to Planner</a>
+    <h2>Deckle {{ deckle }}" — Paper Analysis</h2>
+    <div id="ref-info" class="ref-info"></div>
+</div>
+
+<div id="loading" class="loading">Loading data (this may take a moment on first load)...</div>
+<div id="detail-content" style="display:none">
+
+    <!-- Section 1: Pending BPROs — Same Paper -->
+    <div class="section">
+        <div class="section-header same-paper">
+            <h3>Pending BPROs — Same Paper</h3>
+            <span class="section-count" id="count-ps">0</span>
+            <span class="section-desc">Ready to run, no reel change needed</span>
+        </div>
+        <div id="pending-same" class="section-body"></div>
+    </div>
+
+    <!-- Section 2: Pending BPROs — Different Paper -->
+    <div class="section">
+        <div class="section-header diff-paper">
+            <h3>Pending BPROs — Different Paper</h3>
+            <span class="section-count" id="count-pd">0</span>
+            <span class="section-desc">Planned work, needs reel change</span>
+        </div>
+        <div id="pending-diff" class="section-body"></div>
+    </div>
+
+    <!-- Section 3: Missing Opportunities — Same Paper -->
+    <div class="section">
+        <div class="section-header same-paper missing">
+            <h3>Missing Opportunities — Same Paper</h3>
+            <span class="section-count" id="count-ms">0</span>
+            <span class="section-desc">Historically run, no current BPRO — check with account manager</span>
+        </div>
+        <div id="missing-same" class="section-body"></div>
+    </div>
+
+    <!-- Section 4: Missing Opportunities — Different Paper -->
+    <div class="section">
+        <div class="section-header diff-paper missing">
+            <h3>Missing Opportunities — Different Paper</h3>
+            <span class="section-count" id="count-md">0</span>
+            <span class="section-desc">Historically run at this deckle, different paper config</span>
+        </div>
+        <div id="missing-diff" class="section-body"></div>
+    </div>
+
+</div>
+
+<script>
+const deckle = "{{ deckle }}";
+const refBpro = "{{ ref_bpro }}";
+
+async function loadDetail() {
+    const params = new URLSearchParams({deckle, ref_bpro: refBpro});
+    const res = await fetch(`{{ url_for("api_deckle_detail") }}?${params}`);
+    const data = await res.json();
+
+    if (data.error) {
+        document.getElementById('loading').textContent = 'Error: ' + data.error;
+        return;
+    }
+
+    // Show reference info
+    const refPaper = data.reference_paper || 'N/A';
+    document.getElementById('ref-info').innerHTML =
+        `<strong>Reference BPRO:</strong> ${data.reference_bpro} &nbsp;&middot;&nbsp; ` +
+        `<strong>Paper Config:</strong> <code>${refPaper}</code>`;
+
+    // Render sections
+    renderPending('pending-same', data.pending_same_paper, 'count-ps');
+    renderPending('pending-diff', data.pending_diff_paper, 'count-pd');
+    renderMissing('missing-same', data.missing_same_paper, 'count-ms');
+    renderMissing('missing-diff', data.missing_diff_paper, 'count-md');
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('detail-content').style.display = 'block';
+}
+
+function renderPending(containerId, jobs, countId) {
+    document.getElementById(countId).textContent = jobs.length;
+    const container = document.getElementById(containerId);
+
+    if (jobs.length === 0) {
+        container.innerHTML = '<p class="empty-state">No jobs in this category.</p>';
+        return;
+    }
+
+    let html = `<table>
+        <thead><tr>
+            <th>BPRO</th><th>Board Item</th><th>Paper Config</th><th>Flute</th>
+            <th>IPRO</th><th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th>
+        </tr></thead><tbody>`;
+
+    for (const j of jobs) {
+        html += `<tr>
+            <td class="mono">${j.bpro}</td>
+            <td class="td-item">${j.board_item}</td>
+            <td class="td-paper"><code>${j.paper}</code></td>
+            <td>${j.flute}</td>
+            <td class="mono">${j.ipro}</td>
+            <td>${j.customer}</td>
+            <td>${j.running_name}</td>
+            <td class="td-qty">${j.qty}</td>
+            <td>${j.pro_date}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function renderMissing(containerId, items, countId) {
+    document.getElementById(countId).textContent = items.length;
+    const container = document.getElementById(containerId);
+
+    if (items.length === 0) {
+        container.innerHTML = '<p class="empty-state">No missing opportunities found.</p>';
+        return;
+    }
+
+    let html = `<table>
+        <thead><tr>
+            <th>Board Item</th><th>Paper Config</th><th>Flute</th>
+            <th>Item Name</th><th>Customer</th>
+            <th>Runs (90d)</th><th>Total Qty</th><th>Avg Qty</th><th>Last Run</th>
+        </tr></thead><tbody>`;
+
+    for (const item of items) {
+        html += `<tr>
+            <td class="td-item">${item.board_item}</td>
+            <td class="td-paper"><code>${item.paper}</code></td>
+            <td>${item.flute}</td>
+            <td class="td-item">${item.item_name}</td>
+            <td>${item.customer}</td>
+            <td class="td-qty">${item.runs_90d}</td>
+            <td class="td-qty">${Number(item.total_qty_90d).toLocaleString('en-IN')}</td>
+            <td class="td-qty">${Number(item.avg_qty).toLocaleString('en-IN')}</td>
+            <td>${item.last_run}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+loadDetail();
+</script>
+{% endblock %}

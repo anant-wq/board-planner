@@ -132,6 +132,28 @@ def api_client_jobs():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/deckle-detail")
+@login_required
+def api_deckle_detail():
+    deckle = request.args.get("deckle", "")
+    ref_bpro = request.args.get("ref_bpro", "")
+    if not deckle:
+        return jsonify({"error": "deckle parameter required"}), 400
+    try:
+        data = sheets.get_deckle_detail(deckle, ref_bpro or None)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/detail")
+@login_required
+def detail_page():
+    deckle = request.args.get("deckle", "")
+    ref_bpro = request.args.get("ref_bpro", "")
+    return render_template("detail.html", deckle=deckle, ref_bpro=ref_bpro)
+
+
 @app.route("/api/refresh")
 @login_required
 def api_refresh():

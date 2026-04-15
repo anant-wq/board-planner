@@ -144,7 +144,7 @@ function renderGroups(groups, view) {
                         <th class="th-cb"></th>
                         ${view === 'deckle' ? `
                         <th>BPRO</th><th>Board Item</th><th>IPRO</th>
-                        <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th>
+                        <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th><th></th>
                         ` : `
                         <th>BPRO</th><th>Board Item</th><th>Item Name</th>
                         <th>Running Name</th><th>Qty</th><th>Deckle</th><th>PRO Date</th><th>POC</th>
@@ -164,6 +164,7 @@ function renderGroups(groups, view) {
                     <td>${job.running_name}</td>
                     <td class="td-qty">${job.qty}</td>
                     <td>${job.pro_date}</td>
+                    <td><a href="/detail?deckle=${encodeURIComponent(group.deckle)}&ref_bpro=${encodeURIComponent(job.bpro)}" class="btn-detail" title="View deckle detail with paper analysis">Detail</a></td>
                 </tr>`;
             } else {
                 html += `<tr class="${checked ? 'row-selected' : ''}">
