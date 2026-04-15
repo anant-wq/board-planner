@@ -37,20 +37,39 @@ def _read_sheet(sheet_name, spreadsheet_id=BOARD_JOB_CARD_ID):
     return data.get("values", [])
 
 
-def _cached(key, fetcher):
-    """Return cached data or fetch fresh."""
+def _cached(key, fetcher, use_sqlite=False):
+    """Return cached data or fetch fresh. Two-tier: in-memory (5m) → SQLite (30m) → Sheets."""
+    import json as _json
     now = time.time()
     if key in _cache and now - _cache[key]["ts"] < CACHE_TTL:
         return _cache[key]["data"]
+
+    # Try SQLite cache (30-min TTL)
+    if use_sqlite:
+        import history_db
+        cached_json = history_db.load_pivot(key, max_age_seconds=1800)
+        if cached_json:
+            data = _json.loads(cached_json)
+            _cache[key] = {"data": data, "ts": now}
+            return data
+
     data = fetcher()
     _cache[key] = {"data": data, "ts": now}
+
+    # Save to SQLite cache
+    if use_sqlite:
+        import history_db
+        history_db.save_pivot(key, _json.dumps(data))
+
     return data
 
 
 def clear_cache():
     _cache.clear()
     import history_db
+    import erpnext
     history_db.force_resync()
+    erpnext.force_resync()
 
 
 # ---- Deckle-pivot Auto line ----
@@ -108,7 +127,7 @@ def _parse_deckle_pivot():
 
 
 def get_deckle_jobs():
-    return _cached("deckle", _parse_deckle_pivot)
+    return _cached("deckle", _parse_deckle_pivot, use_sqlite=True)
 
 
 # ---- Client-pivot autoline ----
@@ -166,7 +185,7 @@ def _parse_client_pivot():
 
 
 def get_client_jobs():
-    return _cached("client", _parse_client_pivot)
+    return _cached("client", _parse_client_pivot, use_sqlite=True)
 
 
 # ---- Export helper ----
@@ -339,31 +358,65 @@ def get_history():
 
 
 def get_history_list():
-    """Return flat list of all BPROs produced in last 90 days with details."""
+    """Return flat list of unique boards produced in last 90 days.
+
+    Deduplicates by board_item — multiple BPROs for the same board are
+    aggregated (sum runs/qty, keep most recent dates/customer).
+    """
     history = get_history()
     bpro_master = get_bpro_master()
 
-    results = []
+    # Aggregate by (deckle, board_item) to deduplicate
+    board_agg = {}  # key = (deckle, board_item)
     for deckle, bpros in history.items():
         for bpro, entry in bpros.items():
             master = bpro_master.get(bpro, {})
             board_item = master.get("board_item", "")
-            results.append({
-                "bpro": bpro,
-                "deckle": deckle,
-                "board_item": board_item,
-                "item_name": master.get("item_name", entry.get("item_code", "")),
-                "customer": master.get("customer", ""),
-                "running_name": master.get("running_name", ""),
-                "paper": extract_paper(board_item),
-                "runs": entry["runs"],
-                "total_qty": entry["total_qty"],
-                "avg_qty": round(entry["total_qty"] / entry["runs"]) if entry["runs"] else 0,
-                "last_run": entry["last_run"].strftime("%d/%m/%Y"),
-            })
+            if not board_item:
+                continue
 
-    # Sort by last run date (most recent first)
-    results.sort(key=lambda x: x["last_run"], reverse=True)
+            key = (deckle, board_item)
+            if key not in board_agg:
+                board_agg[key] = {
+                    "deckle": deckle,
+                    "board_item": board_item,
+                    "item_name": master.get("item_name", entry.get("item_code", "")),
+                    "customer": master.get("customer", ""),
+                    "running_name": master.get("running_name", ""),
+                    "paper": extract_paper(board_item),
+                    "runs": 0,
+                    "total_qty": 0,
+                    "last_run": entry["last_run"],
+                }
+
+            agg = board_agg[key]
+            agg["runs"] += entry["runs"]
+            agg["total_qty"] += entry["total_qty"]
+            if entry["last_run"] > agg["last_run"]:
+                agg["last_run"] = entry["last_run"]
+                # Use customer/running_name from most recent entry
+                agg["customer"] = master.get("customer", "") or agg["customer"]
+                agg["running_name"] = master.get("running_name", "") or agg["running_name"]
+                agg["item_name"] = master.get("item_name", "") or agg["item_name"]
+
+    # Get SO pending data
+    import erpnext
+    so_summary = erpnext.get_so_summary()
+
+    results = []
+    for agg in board_agg.values():
+        agg["avg_qty"] = round(agg["total_qty"] / agg["runs"]) if agg["runs"] else 0
+        agg["last_run"] = agg["last_run"].strftime("%d/%m/%Y")
+
+        # Join SO pending data by item_name
+        so = so_summary.get(agg.get("item_name", ""), {})
+        agg["so_pending_qty"] = so.get("pending_qty", 0)
+        agg["so_count"] = so.get("so_count", 0)
+
+        results.append(agg)
+
+    # Sort by SO pending qty (highest first), then by runs
+    results.sort(key=lambda x: (x["so_pending_qty"], x["runs"]), reverse=True)
     return {"items": results, "total": len(results)}
 
 
@@ -392,7 +445,8 @@ def get_deckle_detail(deckle, reference_bpro=None):
             pending_jobs = group["jobs"]
             break
 
-    pending_bpro_set = {j["bpro"] for j in pending_jobs}
+    # Match by board_item (not BPRO) since each production run gets a new BPRO number
+    pending_board_items = {j["board_item"] for j in pending_jobs if j.get("board_item")}
 
     # 2. Determine reference paper config
     ref_paper = ""
@@ -428,13 +482,14 @@ def get_deckle_detail(deckle, reference_bpro=None):
     seen_board_items = set()
 
     for bpro, entry in hist_entries.items():
-        if bpro in pending_bpro_set:
-            continue  # already has a pending BPRO
-
         # Look up board item from master
         master = bpro_master.get(bpro, {})
         board_item = master.get("board_item", "")
         if not board_item:
+            continue
+
+        # Skip if this board already has a pending production order
+        if board_item in pending_board_items:
             continue
 
         # Deduplicate by board_item (same board can have multiple historical BPROs)

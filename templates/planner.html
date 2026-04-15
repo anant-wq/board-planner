@@ -63,7 +63,7 @@
 const selectedJobs = new Set();
 const selectionReasons = {};  // deckle -> "selected via CUSTOMER" reason
 const flaggedHistory = new Set();  // board_item keys flagged for BPRO creation
-let deckleData = null;
+let deckleData = {{ preloaded_deckle|safe }} || null;
 let clientData = null;
 let historyData = null;
 let currentView = 'deckle';
@@ -477,59 +477,144 @@ function scrollToGroup(groupKey, event) {
 }
 
 // ---- History View ----
+function getPriority(it) {
+    const hasSO = (it.so_pending_qty || 0) > 0;
+    const highRuns = it.runs >= 3;
+    if (hasSO && highRuns) return 3; // high
+    if (hasSO || highRuns) return 2; // medium
+    return 1; // low
+}
+
+function getPriorityDot(p) {
+    if (p === 3) return '<span class="dot dot-high" title="High: has pending SOs + 3+ runs"></span>';
+    if (p === 2) return '<span class="dot dot-med" title="Medium: has pending SOs or 3+ runs"></span>';
+    return '<span class="dot dot-low" title="Low"></span>';
+}
+
+function reRenderHistory() {
+    if (historyData) renderHistory(document.getElementById('groups-container'), historyData);
+}
+
 function renderHistory(container, data) {
     const search = document.getElementById('search').value.toLowerCase();
     let items = data.items || [];
+
+    // Apply search filter
     if (search) {
         items = items.filter(it =>
-            (it.bpro + it.board_item + it.item_name + it.customer + it.running_name + it.deckle + it.paper)
+            (it.board_item + it.item_name + it.customer + it.running_name + it.deckle + it.paper)
                 .toLowerCase().includes(search)
         );
     }
 
-    // Group by deckle for breadcrumbs
+    // Apply history filters
+    const filterEl = document.getElementById('hist-filter');
+    const minRunsEl = document.getElementById('hist-min-runs');
+    const sortEl = document.getElementById('hist-sort');
+    const filter = filterEl ? filterEl.value : 'all';
+    const minRuns = minRunsEl ? parseInt(minRunsEl.value) || 1 : 1;
+    const sortBy = sortEl ? sortEl.value : 'priority';
+
+    // Build pending board_items set for "No Active BPRO" filter
+    const pendingBoards = new Set();
+    if (deckleData) {
+        for (const g of deckleData.groups) {
+            for (const j of g.jobs) if (j.board_item) pendingBoards.add(j.board_item);
+        }
+    }
+
+    // Filter
+    items = items.filter(it => {
+        if (it.runs < minRuns) return false;
+        if (filter === 'with_so' && !(it.so_pending_qty > 0)) return false;
+        if (filter === 'no_bpro' && pendingBoards.has(it.board_item)) return false;
+        return true;
+    });
+
+    // Sort
+    items.sort((a, b) => {
+        if (sortBy === 'priority') return getPriority(b) - getPriority(a) || (b.so_pending_qty || 0) - (a.so_pending_qty || 0);
+        if (sortBy === 'so_qty') return (b.so_pending_qty || 0) - (a.so_pending_qty || 0);
+        if (sortBy === 'runs') return b.runs - a.runs;
+        if (sortBy === 'last_run') return (b.last_run > a.last_run ? 1 : -1);
+        return 0;
+    });
+
+    // Count summary
+    const withSO = items.filter(it => (it.so_pending_qty || 0) > 0).length;
+    const noBPRO = items.filter(it => !pendingBoards.has(it.board_item)).length;
+
+    // Group by deckle
     const deckleGroups = {};
     for (const it of items) {
         if (!deckleGroups[it.deckle]) deckleGroups[it.deckle] = [];
         deckleGroups[it.deckle].push(it);
     }
 
-    // Render breadcrumbs
+    // Breadcrumbs
     const bc = document.getElementById('breadcrumbs');
     let bcHtml = '';
     const sortedDeckles = Object.keys(deckleGroups).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
     for (const d of sortedDeckles) {
-        bcHtml += `<a class="bc-chip" href="#" onclick="scrollToGroup('hist_${d}', event)">${d}" <span class="bc-count">${deckleGroups[d].length}</span></a>`;
+        const soCount = deckleGroups[d].filter(it => (it.so_pending_qty || 0) > 0).length;
+        const soBadge = soCount > 0 ? `<span class="bc-sel">${soCount}</span>` : '';
+        bcHtml += `<a class="bc-chip" href="#" onclick="scrollToGroup('hist_${d}', event)">${d}" <span class="bc-count">${deckleGroups[d].length}</span>${soBadge}</a>`;
     }
     bc.innerHTML = bcHtml;
 
+    // Filter bar
+    let html = `<div class="hist-filters">
+        <label>Filter: <select id="hist-filter" onchange="reRenderHistory()">
+            <option value="all" ${filter==='all'?'selected':''}>All (${items.length})</option>
+            <option value="with_so" ${filter==='with_so'?'selected':''}>With Pending SOs (${withSO})</option>
+            <option value="no_bpro" ${filter==='no_bpro'?'selected':''}>No Active BPRO (${noBPRO})</option>
+        </select></label>
+        <label>Min Runs: <select id="hist-min-runs" onchange="reRenderHistory()">
+            <option value="1" ${minRuns===1?'selected':''}>1+</option>
+            <option value="2" ${minRuns===2?'selected':''}>2+</option>
+            <option value="3" ${minRuns===3?'selected':''}>3+</option>
+            <option value="5" ${minRuns===5?'selected':''}>5+</option>
+        </select></label>
+        <label>Sort: <select id="hist-sort" onchange="reRenderHistory()">
+            <option value="priority" ${sortBy==='priority'?'selected':''}>Priority</option>
+            <option value="so_qty" ${sortBy==='so_qty'?'selected':''}>SO Pending Qty</option>
+            <option value="runs" ${sortBy==='runs'?'selected':''}>Runs</option>
+            <option value="last_run" ${sortBy==='last_run'?'selected':''}>Last Run</option>
+        </select></label>
+        <span class="hist-summary">${items.length} boards &middot; ${withSO} with pending SOs</span>
+    </div>`;
+
     // Render grouped tables
-    let html = '';
     for (const d of sortedDeckles) {
         const groupItems = deckleGroups[d];
+        const groupSO = groupItems.filter(it => (it.so_pending_qty || 0) > 0).length;
         const groupId = 'group-hist_' + d.replace(/[^a-zA-Z0-9]/g, '_');
         html += `<details class="deckle-group" id="${groupId}">
             <summary class="group-header">
                 <span class="group-title">Deckle ${d}"</span>
-                <span class="group-meta">${groupItems.length} boards produced in last 90 days</span>
+                <span class="group-meta">${groupItems.length} boards${groupSO > 0 ? ' &middot; ' + groupSO + ' with SOs' : ''}</span>
             </summary>
             <div class="group-body"><table>
                 <thead><tr>
-                    <th>BPRO</th><th>Board Item</th><th>Paper Config</th>
+                    <th></th><th>Board Item</th><th>Paper Config</th>
                     <th>Customer</th><th>Running Name</th>
-                    <th>Runs</th><th>Total Qty</th><th>Avg Qty</th><th>Last Run</th>
+                    <th>Runs</th><th>Total Qty</th><th>Last Run</th>
+                    <th>SO Pending</th><th>SOs</th>
                 </tr></thead><tbody>`;
         for (const it of groupItems) {
-            html += `<tr>
-                <td class="mono">${it.bpro}</td>
+            const p = getPriority(it);
+            const soClass = (it.so_pending_qty || 0) > 0 ? ' row-has-so' : '';
+            html += `<tr class="${soClass}">
+                <td>${getPriorityDot(p)}</td>
                 <td class="td-item">${it.board_item}</td>
                 <td class="td-paper"><code>${it.paper}</code></td>
                 <td>${it.customer}</td>
                 <td>${it.running_name}</td>
                 <td class="td-qty">${it.runs}</td>
                 <td class="td-qty">${formatQty(it.total_qty)}</td>
-                <td class="td-qty">${formatQty(it.avg_qty)}</td>
                 <td>${it.last_run}</td>
+                <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
+                <td class="td-qty">${(it.so_count||0) > 0 ? it.so_count : '—'}</td>
             </tr>`;
         }
         html += '</tbody></table></div></details>';
@@ -561,10 +646,13 @@ async function renderSelection(container) {
         await fetchHistory();
     }
 
-    // Build set of ALL pending BPROs (across all deckles)
-    const allPendingBpros = new Set();
+    // Build set of ALL pending board items (across all deckles)
+    // Match by board_item, not BPRO — each production run gets a new BPRO number
+    const allPendingBoardItems = new Set();
     for (const group of deckleData.groups) {
-        for (const job of group.jobs) allPendingBpros.add(job.bpro);
+        for (const job of group.jobs) {
+            if (job.board_item) allPendingBoardItems.add(job.board_item);
+        }
     }
 
     // Gather selected job details
@@ -624,7 +712,7 @@ async function renderSelection(container) {
 
         // Find 90-day history items for this deckle that are NOT pending
         const histItems = histByDeckle[d] || [];
-        const missingItems = histItems.filter(it => !allPendingBpros.has(it.bpro));
+        const missingItems = histItems.filter(it => it.board_item && !allPendingBoardItems.has(it.board_item));
 
         // Split missing into same-paper and different-paper
         const missingSame = [];
@@ -719,23 +807,28 @@ function renderMissingTable(items) {
     let html = `<table class="missing-table">
         <thead><tr>
             <th class="th-cb"></th>
-            <th>Board Item</th><th>Paper Config</th>
+            <th></th><th>Board Item</th><th>Paper Config</th>
             <th>Customer</th><th>Running Name</th>
-            <th>Runs (90d)</th><th>Total Qty</th><th>Avg Qty</th><th>Last Run</th>
+            <th>Runs (90d)</th><th>Total Qty</th><th>Last Run</th>
+            <th>SO Pending</th><th>SOs</th>
         </tr></thead><tbody>`;
     for (const it of items) {
         const key = it.board_item + '|' + it.customer;
         const checked = flaggedHistory.has(key) ? 'checked' : '';
-        html += `<tr class="${checked ? 'row-flagged' : ''}">
+        const p = getPriority(it);
+        const soClass = (it.so_pending_qty || 0) > 0 ? ' row-has-so' : '';
+        html += `<tr class="${checked ? 'row-flagged' : ''}${soClass}">
             <td><input type="checkbox" ${checked} data-key="${escHtml(key)}" data-board="${escHtml(it.board_item)}" data-customer="${escHtml(it.customer)}" data-running="${escHtml(it.running_name)}" data-paper="${escHtml(it.paper)}" data-runs="${it.runs}" data-lastrun="${it.last_run}" onchange="toggleFlag(this)"></td>
+            <td>${getPriorityDot(p)}</td>
             <td class="td-item">${it.board_item}</td>
             <td class="td-paper"><code>${it.paper}</code></td>
             <td>${it.customer}</td>
             <td>${it.running_name}</td>
             <td class="td-qty">${it.runs}</td>
             <td class="td-qty">${formatQty(it.total_qty)}</td>
-            <td class="td-qty">${formatQty(it.avg_qty)}</td>
             <td>${it.last_run}</td>
+            <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
+            <td class="td-qty">${(it.so_count||0) > 0 ? it.so_count : '—'}</td>
         </tr>`;
     }
     html += '</tbody></table>';

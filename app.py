@@ -112,7 +112,12 @@ def index():
 @app.route("/planner")
 @login_required
 def planner_page():
-    return render_template("planner.html")
+    import json
+    try:
+        deckle_data = sheets.get_deckle_jobs()
+    except Exception:
+        deckle_data = None
+    return render_template("planner.html", preloaded_deckle=json.dumps(deckle_data))
 
 
 # ---- API Routes ----
@@ -165,6 +170,17 @@ def api_history():
     try:
         data = sheets.get_history_list()
         return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/so-pending")
+@login_required
+def api_so_pending():
+    try:
+        import erpnext
+        data = erpnext.get_so_summary()
+        return jsonify({"items": len(data), "ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

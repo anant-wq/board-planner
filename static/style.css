@@ -156,6 +156,26 @@ nav {
 .btn-email:hover { background: #0b5ed7; }
 .btn-email:disabled { background: #6c757d; cursor: not-allowed; opacity: 0.6; }
 
+/* Priority dots */
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.dot-high { background: #28a745; }
+.dot-med { background: #ffc107; }
+.dot-low { background: #ccc; }
+
+/* SO highlight */
+.row-has-so { border-left: 3px solid #28a745; }
+.so-highlight { color: #155724; font-weight: 600; }
+
+/* History filter bar */
+.hist-filters {
+    display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; margin-bottom: 10px;
+    background: #e8f0fe; border-radius: 6px; font-size: 0.82rem;
+}
+.hist-filters label { display: flex; align-items: center; gap: 4px; }
+.hist-filters select { padding: 3px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.82rem; }
+.hist-summary { margin-left: auto; color: #555; font-weight: 500; }
+
 /* Breadcrumbs */
 .breadcrumbs {
     display: flex;

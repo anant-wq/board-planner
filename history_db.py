@@ -36,6 +36,11 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT
         );
+        CREATE TABLE IF NOT EXISTS pivot_cache (
+            key TEXT PRIMARY KEY,
+            data TEXT,
+            updated_at TEXT
+        );
     """)
     conn.commit()
     conn.close()
@@ -123,8 +128,33 @@ def force_resync():
     """Force a re-sync on next access."""
     conn = _get_conn()
     conn.execute("DELETE FROM meta WHERE key='last_sync'")
+    conn.execute("DELETE FROM pivot_cache")
     conn.commit()
     conn.close()
+
+
+# ---- Pivot cache (30-min SQLite behind 5-min in-memory) ----
+
+def save_pivot(key, json_data):
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO pivot_cache (key, data, updated_at) VALUES (?, ?, ?)",
+        (key, json_data, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def load_pivot(key, max_age_seconds=1800):
+    conn = _get_conn()
+    row = conn.execute("SELECT data, updated_at FROM pivot_cache WHERE key=?", (key,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    updated = datetime.fromisoformat(row["updated_at"])
+    if (datetime.now() - updated).total_seconds() > max_age_seconds:
+        return None
+    return row["data"]
 
 
 # Initialize DB on import
