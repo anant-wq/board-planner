@@ -399,19 +399,22 @@ def get_history_list():
                 agg["running_name"] = master.get("running_name", "") or agg["running_name"]
                 agg["item_name"] = master.get("item_name", "") or agg["item_name"]
 
-    # Get SO pending data
+    # Get SO pending data and FG stock
     import erpnext
     so_summary = erpnext.get_so_summary()
+    fg_stock = erpnext.get_fg_stock()
 
     results = []
     for agg in board_agg.values():
         agg["avg_qty"] = round(agg["total_qty"] / agg["runs"]) if agg["runs"] else 0
         agg["last_run"] = agg["last_run"].strftime("%d/%m/%Y")
 
-        # Join SO pending data by item_name
-        so = so_summary.get(agg.get("item_name", ""), {})
+        # Join SO pending data and FG stock by item_name
+        item_name = agg.get("item_name", "")
+        so = so_summary.get(item_name, {})
         agg["so_pending_qty"] = so.get("pending_qty", 0)
         agg["so_count"] = so.get("so_count", 0)
+        agg["fg_qty"] = fg_stock.get(item_name, 0)
 
         results.append(agg)
 

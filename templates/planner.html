@@ -599,7 +599,7 @@ function renderHistory(container, data) {
                     <th></th><th>Board Item</th><th>Paper Config</th>
                     <th>Customer</th><th>Running Name</th>
                     <th>Runs</th><th>Total Qty</th><th>Last Run</th>
-                    <th>SO Pending</th><th>SOs</th>
+                    <th>FG Stock</th><th>SO Pending</th><th>SOs</th>
                 </tr></thead><tbody>`;
         for (const it of groupItems) {
             const p = getPriority(it);
@@ -613,6 +613,7 @@ function renderHistory(container, data) {
                 <td class="td-qty">${it.runs}</td>
                 <td class="td-qty">${formatQty(it.total_qty)}</td>
                 <td>${it.last_run}</td>
+                <td class="td-qty">${(it.fg_qty||0) > 0 ? formatQty(it.fg_qty) : '—'}</td>
                 <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
                 <td class="td-qty">${(it.so_count||0) > 0 ? it.so_count : '—'}</td>
             </tr>`;
@@ -810,7 +811,7 @@ function renderMissingTable(items) {
             <th></th><th>Board Item</th><th>Paper Config</th>
             <th>Customer</th><th>Running Name</th>
             <th>Runs (90d)</th><th>Total Qty</th><th>Last Run</th>
-            <th>SO Pending</th><th>SOs</th>
+            <th>FG Stock</th><th>SO Pending</th><th>SOs</th>
         </tr></thead><tbody>`;
     for (const it of items) {
         const key = it.board_item + '|' + it.customer;
@@ -827,6 +828,7 @@ function renderMissingTable(items) {
             <td class="td-qty">${it.runs}</td>
             <td class="td-qty">${formatQty(it.total_qty)}</td>
             <td>${it.last_run}</td>
+            <td class="td-qty">${(it.fg_qty||0) > 0 ? formatQty(it.fg_qty) : '—'}</td>
             <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
             <td class="td-qty">${(it.so_count||0) > 0 ? it.so_count : '—'}</td>
         </tr>`;

@@ -34,6 +34,11 @@ def init_so_tables():
             total_pending_qty REAL,
             so_count INTEGER
         );
+        CREATE TABLE IF NOT EXISTS fg_stock (
+            item_code TEXT PRIMARY KEY,
+            actual_qty REAL,
+            location TEXT
+        );
     """)
     conn.commit()
     conn.close()
@@ -151,13 +156,98 @@ def get_so_summary():
     return result
 
 
+_fg_cache = {}
+_fg_cache_ts = 0
+
+DAILY_PLAN_SHEET_ID = "1ijtNeYhrEER6G8QlJs9ErL7TPmCc-SiiaGQpdOQzsPE"
+FG_SHEET_NAME = "ALL Point FG"
+
+
+def _needs_fg_sync():
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM meta WHERE key='fg_last_sync'").fetchone()
+    conn.close()
+    if row:
+        last = datetime.fromisoformat(row["value"])
+        return (datetime.now() - last) > timedelta(hours=24)
+    return True
+
+
+def _sync_fg_stock():
+    """Fetch FG stock from Google Sheet and save to SQLite."""
+    from sheets import _read_sheet
+    print("[fg] Syncing FG stock from Google Sheet...")
+    rows = _read_sheet(FG_SHEET_NAME, spreadsheet_id=DAILY_PLAN_SHEET_ID)
+    if not rows or len(rows) < 2:
+        print("[fg] No FG data found")
+        return
+
+    # Aggregate by Erp Code (col 3), sum QTY (col 5)
+    summary = {}  # erp_code -> {qty, location}
+    for row in rows[1:]:
+        erp_code = row[3].strip() if len(row) > 3 and row[3] else ""
+        qty_str = row[5].strip() if len(row) > 5 and row[5] else ""
+        location = row[6].strip() if len(row) > 6 and row[6] else ""
+        if not erp_code:
+            continue
+        try:
+            qty = float(qty_str) if qty_str else 0
+        except (ValueError, TypeError):
+            qty = 0
+        if qty <= 0:
+            continue
+
+        if erp_code in summary:
+            summary[erp_code]["qty"] += qty
+        else:
+            summary[erp_code] = {"qty": qty, "location": location}
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM fg_stock")
+    for code, data in summary.items():
+        conn.execute(
+            "INSERT INTO fg_stock (item_code, actual_qty, location) VALUES (?, ?, ?)",
+            (code, data["qty"], data["location"])
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('fg_last_sync', ?)",
+        (datetime.now().isoformat(),)
+    )
+    conn.commit()
+    conn.close()
+    print(f"[fg] Saved FG stock for {len(summary)} items")
+
+
+def get_fg_stock():
+    """Get FG stock lookup. Returns dict: item_code -> actual_qty."""
+    global _fg_cache, _fg_cache_ts
+
+    if _fg_cache and (time.time() - _fg_cache_ts) < 300:
+        return _fg_cache
+
+    if _needs_fg_sync():
+        _sync_fg_stock()
+
+    conn = _get_conn()
+    rows = conn.execute("SELECT item_code, actual_qty FROM fg_stock").fetchall()
+    conn.close()
+
+    result = {row["item_code"]: row["actual_qty"] for row in rows}
+    _fg_cache = result
+    _fg_cache_ts = time.time()
+    return result
+
+
 def force_resync():
     """Force re-sync on next access."""
-    global _so_cache, _so_cache_ts
+    global _so_cache, _so_cache_ts, _fg_cache, _fg_cache_ts
     _so_cache = {}
     _so_cache_ts = 0
+    _fg_cache = {}
+    _fg_cache_ts = 0
     conn = _get_conn()
     conn.execute("DELETE FROM meta WHERE key='so_last_sync'")
+    conn.execute("DELETE FROM meta WHERE key='fg_last_sync'")
     conn.commit()
     conn.close()
 
