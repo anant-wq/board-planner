@@ -215,43 +215,49 @@ def api_export_plan():
     return jsonify({"csv": csv_text, "job_count": len(jobs), "date": plan_date})
 
 
-@app.route("/api/send-email", methods=["POST"])
+WHATSAPP_GROUPS = [
+    "120363425793020306@g.us",
+    "120363419163916516@g.us",
+]
+
+WASENDER_BASE = "https://api.wasenderapi.com"
+WASENDER_API_KEY = os.environ.get("WASENDER_API_KEY", "")
+
+
+@app.route("/api/send-bpro-request", methods=["POST"])
 @login_required
-def api_send_email():
+def api_send_bpro_request():
     body = request.get_json(force=True)
-    to_emails = body.get("to", "")
-    subject = body.get("subject", "")
-    email_body = body.get("body", "")
+    message = body.get("message", "")
 
-    if not to_emails or not subject or not email_body:
-        return jsonify({"error": "Missing to, subject, or body"}), 400
+    if not message:
+        return jsonify({"error": "No message to send"}), 400
 
-    access_token = session.get("google_token")
-    if not access_token:
-        return jsonify({"error": "Not authenticated with Gmail. Please logout and login again."}), 401
+    if not WASENDER_API_KEY:
+        return jsonify({"error": "WhatsApp API key not configured"}), 500
 
-    sender = session["user"]["email"]
+    results = []
+    for group_jid in WHATSAPP_GROUPS:
+        try:
+            resp = http_requests.post(
+                f"{WASENDER_BASE}/api/send-message",
+                json={"to": group_jid, "text": message},
+                headers={
+                    "Authorization": f"Bearer {WASENDER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+            results.append({"group": group_jid, "status": resp.status_code, "ok": 200 <= resp.status_code < 300})
+        except Exception as e:
+            results.append({"group": group_jid, "status": 0, "ok": False, "error": str(e)})
 
-    # Build MIME message
-    msg = MIMEText(email_body)
-    msg["to"] = to_emails
-    msg["from"] = sender
-    msg["subject"] = subject
-
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-
-    # Send via Gmail API
-    resp = http_requests.post(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-        json={"raw": raw},
-    )
-
-    if resp.status_code == 200:
-        return jsonify({"ok": True, "message": f"Email sent to {to_emails}"})
-    else:
-        error_detail = resp.json().get("error", {}).get("message", resp.text)
-        return jsonify({"error": f"Gmail API error: {error_detail}"}), resp.status_code
+    success_count = sum(1 for r in results if r["ok"])
+    return jsonify({
+        "ok": success_count > 0,
+        "message": f"Sent to {success_count}/{len(WHATSAPP_GROUPS)} groups",
+        "results": results,
+    })
 
 
 if __name__ == "__main__":

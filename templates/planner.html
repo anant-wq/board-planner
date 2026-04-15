@@ -33,7 +33,7 @@
     <input type="text" id="search" class="search-input" placeholder="Search BPRO, customer, item..." oninput="filterJobs()">
     <button class="btn btn-sm" onclick="refreshData()">Refresh</button>
     <button class="btn btn-del btn-sm" onclick="if(confirm('Clear all selections?')) clearSelection()">Reset All</button>
-    <button class="btn btn-email btn-sm" id="email-flag-btn" disabled onclick="sendFlagEmail()">Email BPRO Request</button>
+    <button class="btn btn-email btn-sm" id="email-flag-btn" disabled onclick="sendFlagEmail()">Send BPRO Request</button>
 </div>
 
 <!-- Breadcrumbs -->
@@ -761,8 +761,8 @@ function updateFlagCount() {
     const btn = document.getElementById('email-flag-btn');
     if (btn) {
         btn.textContent = flaggedHistory.size > 0
-            ? `Email BPRO Request (${flaggedHistory.size})`
-            : 'Email BPRO Request';
+            ? `Send BPRO Request (${flaggedHistory.size})`
+            : 'Send BPRO Request';
         btn.disabled = flaggedHistory.size === 0;
     }
 }
@@ -773,8 +773,7 @@ async function sendFlagEmail() {
         return;
     }
 
-    const emails = prompt('Enter email addresses (comma-separated):');
-    if (!emails || !emails.trim()) return;
+    if (!confirm(`Send BPRO request for ${flaggedHistory.size} board(s) to WhatsApp groups?`)) return;
 
     // Collect flagged item details from checkboxes
     const items = [];
@@ -796,26 +795,23 @@ async function sendFlagEmail() {
         byCustomer[it.customer].push(it);
     }
 
-    // Build email body
+    // Build WhatsApp message
     const planDate = document.getElementById('plan-date').value || new Date().toLocaleDateString('en-IN');
-    let body = `Board Production Planning - ${planDate}\n\n`;
-    body += `The following ${items.length} board(s) were identified from 90-day production history as needing new BPROs.\n`;
-    body += `These boards have been historically produced but currently have no active production orders.\n\n`;
-    body += `Please review and create BPROs as needed:\n\n`;
+    let msg = `📋 *BPRO Request — ${planDate}*\n\n`;
+    msg += `${items.length} board(s) identified from 90-day history needing new BPROs.\n`;
+    msg += `These have been historically produced but have no active production orders.\n\n`;
 
     for (const [customer, custItems] of Object.entries(byCustomer)) {
-        body += `--- ${customer} ---\n`;
+        msg += `*--- ${customer} ---*\n`;
         for (const it of custItems) {
-            body += `  Board: ${it.board_item}\n`;
-            body += `  Paper: ${it.paper} | Runs (90d): ${it.runs} | Last Run: ${it.last_run}\n`;
-            if (it.running_name) body += `  Running Name: ${it.running_name}\n`;
-            body += '\n';
+            msg += `Board: ${it.board_item}\n`;
+            msg += `Paper: ${it.paper} | Runs: ${it.runs} | Last: ${it.last_run}\n`;
+            if (it.running_name) msg += `Running: ${it.running_name}\n`;
+            msg += '\n';
         }
     }
 
-    body += `\nGenerated from Board Planner — ${window.location.origin}/board-planner/planner`;
-
-    const subject = `BPRO Request: ${items.length} board(s) need production orders — ${planDate}`;
+    msg += `_Please review and create BPROs as needed._`;
 
     // Send via server API
     const btn = document.getElementById('email-flag-btn');
@@ -823,17 +819,16 @@ async function sendFlagEmail() {
     btn.disabled = true;
 
     try {
-        const res = await fetch('{{ url_for("api_send_email") }}', {
+        const res = await fetch('{{ url_for("api_send_bpro_request") }}', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({to: emails.trim(), subject, body})
+            body: JSON.stringify({message: msg})
         });
         const data = await res.json();
 
         if (data.ok) {
-            alert(`Email sent successfully to ${emails.trim()}`);
+            alert(data.message);
             flaggedHistory.clear();
-            // Re-render to uncheck all
             if (currentView === 'selection') {
                 await renderSelection(document.getElementById('groups-container'));
             }
@@ -841,7 +836,7 @@ async function sendFlagEmail() {
             alert('Failed to send: ' + (data.error || 'Unknown error'));
         }
     } catch (e) {
-        alert('Error sending email: ' + e.message);
+        alert('Error: ' + e.message);
     }
     updateFlagCount();
 }
