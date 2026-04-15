@@ -144,6 +144,18 @@ nav {
 .missing-table tr { background: #fafafa; }
 .empty-hint { color: #888; font-size: 0.82rem; padding: 4px 10px; font-style: italic; }
 
+/* Collapsible history sections */
+.hist-section { margin-bottom: 0.5rem; }
+.hist-section > summary { cursor: pointer; list-style: none; }
+.hist-section > summary::before { content: '▶ '; font-size: 0.7rem; margin-right: 4px; }
+.hist-section[open] > summary::before { content: '▼ '; }
+
+/* Flagged rows */
+.row-flagged { background: #e8f5e9 !important; }
+.btn-email { background: #0d6efd; }
+.btn-email:hover { background: #0b5ed7; }
+.btn-email:disabled { background: #6c757d; cursor: not-allowed; opacity: 0.6; }
+
 /* Breadcrumbs */
 .breadcrumbs {
     display: flex;

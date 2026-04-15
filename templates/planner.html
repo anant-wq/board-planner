@@ -33,6 +33,7 @@
     <input type="text" id="search" class="search-input" placeholder="Search BPRO, customer, item..." oninput="filterJobs()">
     <button class="btn btn-sm" onclick="refreshData()">Refresh</button>
     <button class="btn btn-del btn-sm" onclick="if(confirm('Clear all selections?')) clearSelection()">Reset All</button>
+    <button class="btn btn-email btn-sm" id="email-flag-btn" disabled onclick="sendFlagEmail()">Email BPRO Request</button>
 </div>
 
 <!-- Breadcrumbs -->
@@ -61,6 +62,7 @@
 // ---- State ----
 const selectedJobs = new Set();
 const selectionReasons = {};  // deckle -> "selected via CUSTOMER" reason
+const flaggedHistory = new Set();  // board_item keys flagged for BPRO creation
 let deckleData = null;
 let clientData = null;
 let historyData = null;
@@ -672,21 +674,25 @@ async function renderSelection(container) {
         }
         html += '</tbody></table>';
 
-        // Section: Missing Opportunities — Same Paper
-        html += `<h4 class="sel-section-title same-paper-title">90-Day History — Same Paper (${missingSame.length})</h4>`;
+        // Section: Missing Opportunities — Same Paper (collapsible)
+        html += `<details class="hist-section" open>
+            <summary class="sel-section-title same-paper-title">90-Day History — Same Paper (${missingSame.length})</summary>`;
         if (missingSame.length > 0) {
             html += renderMissingTable(missingSame);
         } else {
             html += '<p class="empty-hint">No matching boards with same paper found in 90-day history.</p>';
         }
+        html += '</details>';
 
-        // Section: Missing Opportunities — Different Paper
-        html += `<h4 class="sel-section-title diff-paper-title">90-Day History — Different Paper (${missingDiff.length})</h4>`;
+        // Section: Missing Opportunities — Different Paper (collapsible)
+        html += `<details class="hist-section">
+            <summary class="sel-section-title diff-paper-title">90-Day History — Different Paper (${missingDiff.length})</summary>`;
         if (missingDiff.length > 0) {
             html += renderMissingTable(missingDiff);
         } else {
             html += '<p class="empty-hint">No boards with different paper found in 90-day history.</p>';
         }
+        html += '</details>';
 
         html += '</div></details>';
     }
@@ -712,12 +718,16 @@ function extractPaperJS(boardItem) {
 function renderMissingTable(items) {
     let html = `<table class="missing-table">
         <thead><tr>
+            <th class="th-cb"></th>
             <th>Board Item</th><th>Paper Config</th>
             <th>Customer</th><th>Running Name</th>
             <th>Runs (90d)</th><th>Total Qty</th><th>Avg Qty</th><th>Last Run</th>
         </tr></thead><tbody>`;
     for (const it of items) {
-        html += `<tr>
+        const key = it.board_item + '|' + it.customer;
+        const checked = flaggedHistory.has(key) ? 'checked' : '';
+        html += `<tr class="${checked ? 'row-flagged' : ''}">
+            <td><input type="checkbox" ${checked} data-key="${escHtml(key)}" data-board="${escHtml(it.board_item)}" data-customer="${escHtml(it.customer)}" data-running="${escHtml(it.running_name)}" data-paper="${escHtml(it.paper)}" data-runs="${it.runs}" data-lastrun="${it.last_run}" onchange="toggleFlag(this)"></td>
             <td class="td-item">${it.board_item}</td>
             <td class="td-paper"><code>${it.paper}</code></td>
             <td>${it.customer}</td>
@@ -730,6 +740,84 @@ function renderMissingTable(items) {
     }
     html += '</tbody></table>';
     return html;
+}
+
+function escHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+function toggleFlag(checkbox) {
+    const key = checkbox.dataset.key;
+    if (checkbox.checked) {
+        flaggedHistory.add(key);
+    } else {
+        flaggedHistory.delete(key);
+    }
+    checkbox.closest('tr').classList.toggle('row-flagged', checkbox.checked);
+    updateFlagCount();
+}
+
+function updateFlagCount() {
+    const btn = document.getElementById('email-flag-btn');
+    if (btn) {
+        btn.textContent = flaggedHistory.size > 0
+            ? `Email BPRO Request (${flaggedHistory.size})`
+            : 'Email BPRO Request';
+        btn.disabled = flaggedHistory.size === 0;
+    }
+}
+
+function sendFlagEmail() {
+    if (flaggedHistory.size === 0) {
+        alert('No items flagged. Tick items in the 90-day history sections first.');
+        return;
+    }
+
+    const emails = prompt('Enter email addresses (comma-separated):');
+    if (!emails || !emails.trim()) return;
+
+    // Collect flagged item details from checkboxes
+    const items = [];
+    document.querySelectorAll('.missing-table input[type="checkbox"]:checked').forEach(cb => {
+        items.push({
+            board_item: cb.dataset.board,
+            customer: cb.dataset.customer,
+            running_name: cb.dataset.running,
+            paper: cb.dataset.paper,
+            runs: cb.dataset.runs,
+            last_run: cb.dataset.lastrun,
+        });
+    });
+
+    // Group by customer
+    const byCustomer = {};
+    for (const it of items) {
+        if (!byCustomer[it.customer]) byCustomer[it.customer] = [];
+        byCustomer[it.customer].push(it);
+    }
+
+    // Build email body
+    const planDate = document.getElementById('plan-date').value || new Date().toLocaleDateString('en-IN');
+    let body = `Board Production Planning - ${planDate}\n\n`;
+    body += `The following ${items.length} board(s) were identified from 90-day production history as needing new BPROs.\n`;
+    body += `These boards have been historically produced but currently have no active production orders.\n\n`;
+    body += `Please review and create BPROs as needed:\n\n`;
+
+    for (const [customer, custItems] of Object.entries(byCustomer)) {
+        body += `--- ${customer} ---\n`;
+        for (const it of custItems) {
+            body += `  Board: ${it.board_item}\n`;
+            body += `  Paper: ${it.paper} | Runs (90d): ${it.runs} | Last Run: ${it.last_run}\n`;
+            if (it.running_name) body += `  Running Name: ${it.running_name}\n`;
+            body += '\n';
+        }
+    }
+
+    body += `\nGenerated from Board Planner — ${window.location.origin}/board-planner/planner`;
+
+    const subject = `BPRO Request: ${items.length} board(s) need production orders — ${planDate}`;
+    const mailto = `mailto:${encodeURIComponent(emails.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(mailto, '_blank');
 }
 
 async function removeSelJob(bpro) {
