@@ -1,6 +1,7 @@
 import os
 import base64
 import secrets
+import time
 from datetime import timedelta
 from email.mime.text import MIMEText
 from functools import wraps
@@ -237,7 +238,9 @@ def api_send_bpro_request():
         return jsonify({"error": "WhatsApp API key not configured"}), 500
 
     results = []
-    for group_jid in WHATSAPP_GROUPS:
+    for i, group_jid in enumerate(WHATSAPP_GROUPS):
+        if i > 0:
+            time.sleep(3)  # delay between messages to avoid rate limiting
         try:
             resp = http_requests.post(
                 f"{WASENDER_BASE}/api/send-message",
