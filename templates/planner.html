@@ -107,8 +107,7 @@ async function loadView(view) {
     const bc = document.getElementById('breadcrumbs');
 
     if (view === 'selection') {
-        renderSelection(container);
-        bc.innerHTML = '';
+        await renderSelection(container);
         return;
     }
 
@@ -530,20 +529,33 @@ function renderHistory(container, data) {
 }
 
 // ---- Current Selection View ----
-function renderSelection(container) {
+async function renderSelection(container) {
     if (selectedJobs.size === 0) {
         document.getElementById('total-jobs').textContent = '0';
         document.getElementById('total-groups').textContent = '0';
+        document.getElementById('breadcrumbs').innerHTML = '';
         container.innerHTML = '<p class="empty-state">No jobs selected. Go to Deckle or Client view to select jobs.</p>';
         return;
     }
 
-    // Gather selected job details from deckle data
     if (!deckleData) {
         container.innerHTML = '<p class="loading">Load Deckle View first to see selection details.</p>';
         return;
     }
 
+    // Ensure history is loaded
+    if (!historyData) {
+        container.innerHTML = '<p class="loading">Loading 90-day history...</p>';
+        await fetchHistory();
+    }
+
+    // Build set of ALL pending BPROs (across all deckles)
+    const allPendingBpros = new Set();
+    for (const group of deckleData.groups) {
+        for (const job of group.jobs) allPendingBpros.add(job.bpro);
+    }
+
+    // Gather selected job details
     const selJobs = [];
     for (const group of deckleData.groups) {
         for (const job of group.jobs) {
@@ -563,6 +575,15 @@ function renderSelection(container) {
 
     const sortedDeckles = Object.keys(grouped).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
 
+    // Group history by deckle for quick lookup
+    const histByDeckle = {};
+    if (historyData && historyData.items) {
+        for (const it of historyData.items) {
+            if (!histByDeckle[it.deckle]) histByDeckle[it.deckle] = [];
+            histByDeckle[it.deckle].push(it);
+        }
+    }
+
     // Breadcrumbs with checkboxes and reasons
     const bc = document.getElementById('breadcrumbs');
     let bcHtml = '';
@@ -576,32 +597,61 @@ function renderSelection(container) {
     }
     bc.innerHTML = bcHtml;
 
-    let totalQty = 0;
     let html = '';
     for (const d of sortedDeckles) {
         const jobs = grouped[d];
         let groupQty = 0;
         for (const j of jobs) { try { groupQty += parseInt(j.qty) || 0; } catch(e) {} }
-        totalQty += groupQty;
+
+        // Extract paper configs from selected jobs in this deckle
+        const paperConfigs = new Set();
+        for (const j of jobs) {
+            const p = extractPaperJS(j.board_item);
+            if (p) paperConfigs.add(p);
+        }
+
+        // Find 90-day history items for this deckle that are NOT pending
+        const histItems = histByDeckle[d] || [];
+        const missingItems = histItems.filter(it => !allPendingBpros.has(it.bpro));
+
+        // Split missing into same-paper and different-paper
+        const missingSame = [];
+        const missingDiff = [];
+        const seenBoards = new Set();
+        for (const it of missingItems) {
+            if (seenBoards.has(it.board_item)) continue;
+            seenBoards.add(it.board_item);
+            if (it.paper && paperConfigs.has(it.paper)) {
+                missingSame.push(it);
+            } else {
+                missingDiff.push(it);
+            }
+        }
 
         const groupId = 'group-sel_' + d.replace(/[^a-zA-Z0-9]/g, '_');
         const reason = selectionReasons[d] ? ` (selected via ${selectionReasons[d]})` : '';
+
         html += `<details class="deckle-group" open id="${groupId}">
             <summary class="group-header">
                 <span class="group-title">${d === 'N/A' ? 'No Deckle' : 'Deckle ' + d + '"'}${reason}</span>
-                <span class="group-meta">${jobs.length} jobs &middot; ${formatQty(groupQty)} pcs</span>
+                <span class="group-meta">${jobs.length} pending &middot; ${formatQty(groupQty)} pcs</span>
                 <button class="btn btn-del btn-xs" onclick="event.stopPropagation(); removeSelGroup('${d}')">Remove</button>
             </summary>
-            <div class="group-body"><table>
+            <div class="group-body">
+
+            <h4 class="sel-section-title">Pending BPROs (Selected)</h4>
+            <table>
                 <thead><tr>
-                    <th>BPRO</th><th>Board Item</th><th>IPRO</th>
+                    <th>BPRO</th><th>Board Item</th><th>Paper Config</th><th>IPRO</th>
                     <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th>
                     <th></th>
                 </tr></thead><tbody>`;
         for (const j of jobs) {
+            const paper = extractPaperJS(j.board_item);
             html += `<tr>
                 <td class="mono">${j.bpro}</td>
                 <td class="td-item">${j.board_item}</td>
+                <td class="td-paper"><code>${paper}</code></td>
                 <td class="mono">${j.ipro}</td>
                 <td>${j.customer}</td>
                 <td>${j.running_name}</td>
@@ -610,7 +660,25 @@ function renderSelection(container) {
                 <td><button class="btn btn-del btn-xs" onclick="removeSelJob('${j.bpro}')">x</button></td>
             </tr>`;
         }
-        html += '</tbody></table></div></details>';
+        html += '</tbody></table>';
+
+        // Section: Missing Opportunities — Same Paper
+        html += `<h4 class="sel-section-title same-paper-title">90-Day History — Same Paper (${missingSame.length})</h4>`;
+        if (missingSame.length > 0) {
+            html += renderMissingTable(missingSame);
+        } else {
+            html += '<p class="empty-hint">No matching boards with same paper found in 90-day history.</p>';
+        }
+
+        // Section: Missing Opportunities — Different Paper
+        html += `<h4 class="sel-section-title diff-paper-title">90-Day History — Different Paper (${missingDiff.length})</h4>`;
+        if (missingDiff.length > 0) {
+            html += renderMissingTable(missingDiff);
+        } else {
+            html += '<p class="empty-hint">No boards with different paper found in 90-day history.</p>';
+        }
+
+        html += '</div></details>';
     }
 
     document.getElementById('total-jobs').textContent = selJobs.length;
@@ -618,10 +686,44 @@ function renderSelection(container) {
     container.innerHTML = html;
 }
 
-function removeSelJob(bpro) {
+function extractPaperJS(boardItem) {
+    if (!boardItem) return '';
+    const parts = boardItem.split('-');
+    for (const part of parts) {
+        if (part.includes('_') && /\d/.test(part)) {
+            return part.toLowerCase();
+        }
+    }
+    return '';
+}
+
+function renderMissingTable(items) {
+    let html = `<table class="missing-table">
+        <thead><tr>
+            <th>Board Item</th><th>Paper Config</th>
+            <th>Customer</th><th>Running Name</th>
+            <th>Runs (90d)</th><th>Total Qty</th><th>Avg Qty</th><th>Last Run</th>
+        </tr></thead><tbody>`;
+    for (const it of items) {
+        html += `<tr>
+            <td class="td-item">${it.board_item}</td>
+            <td class="td-paper"><code>${it.paper}</code></td>
+            <td>${it.customer}</td>
+            <td>${it.running_name}</td>
+            <td class="td-qty">${it.runs}</td>
+            <td class="td-qty">${formatQty(it.total_qty)}</td>
+            <td class="td-qty">${formatQty(it.avg_qty)}</td>
+            <td>${it.last_run}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+async function removeSelJob(bpro) {
     selectedJobs.delete(bpro);
     updatePlanCount();
-    renderSelection(document.getElementById('groups-container'));
+    await renderSelection(document.getElementById('groups-container'));
 }
 
 function toggleSelBreadcrumb(checkbox, deckle) {
@@ -630,7 +732,7 @@ function toggleSelBreadcrumb(checkbox, deckle) {
     }
 }
 
-function removeSelGroup(deckle) {
+async function removeSelGroup(deckle) {
     if (!deckleData) return;
     for (const group of deckleData.groups) {
         if (group.deckle === deckle) {
@@ -640,7 +742,7 @@ function removeSelGroup(deckle) {
     }
     delete selectionReasons[deckle];
     updatePlanCount();
-    renderSelection(document.getElementById('groups-container'));
+    await renderSelection(document.getElementById('groups-container'));
 }
 
 // ---- Helpers ----

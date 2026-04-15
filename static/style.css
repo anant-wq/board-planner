@@ -128,6 +128,22 @@ nav {
 .bc-check { cursor: pointer; }
 .bc-check input[type="checkbox"] { margin-right: 4px; vertical-align: middle; cursor: pointer; }
 
+/* Selection view sub-sections */
+.sel-section-title {
+    margin: 1.2rem 0 0.4rem;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-radius: 4px;
+    background: #e8f0fe;
+    color: #2c5282;
+}
+.same-paper-title { background: #d4edda; color: #155724; }
+.diff-paper-title { background: #fff3cd; color: #856404; }
+.missing-table { margin-bottom: 0.5rem; }
+.missing-table tr { background: #fafafa; }
+.empty-hint { color: #888; font-size: 0.82rem; padding: 4px 10px; font-style: italic; }
+
 /* Breadcrumbs */
 .breadcrumbs {
     display: flex;
