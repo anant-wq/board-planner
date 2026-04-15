@@ -1,0 +1,183 @@
+import os
+import secrets
+from datetime import timedelta
+from functools import wraps
+
+from flask import (
+    Flask, request, redirect, url_for, session,
+    render_template, jsonify, flash
+)
+from authlib.integrations.flask_client import OAuth
+
+import sheets
+
+
+# ---- Prefix middleware (app lives at /board-planner/ behind nginx) ----
+
+class PrefixMiddleware:
+    def __init__(self, app, prefix=""):
+        self.app = app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        environ["SCRIPT_NAME"] = self.prefix
+        path = environ.get("PATH_INFO", "")
+        if path.startswith(self.prefix):
+            environ["PATH_INFO"] = path[len(self.prefix):]
+        return self.app(environ, start_response)
+
+
+# ---- Config ----
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app.permanent_session_lifetime = timedelta(days=30)
+app.wsgi_app = PrefixMiddleware(
+    app.wsgi_app,
+    prefix=os.environ.get("APP_PREFIX", "/board-planner")
+)
+
+ALLOWED_DOMAIN = "xpertpack.in"
+
+# ---- OAuth ----
+
+oauth = OAuth(app)
+google = oauth.register(
+    name="google",
+    client_id=os.environ.get("GOOGLE_CLIENT_ID", ""),
+    client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ---- Auth Routes ----
+
+@app.route("/login")
+def login():
+    if session.get("user"):
+        return redirect(url_for("planner_page"))
+    return render_template("login.html")
+
+
+@app.route("/auth/login")
+def auth_login():
+    redirect_uri = url_for("auth_callback", _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+
+@app.route("/auth/callback")
+def auth_callback():
+    token = google.authorize_access_token()
+    user_info = token.get("userinfo") or google.userinfo()
+    email = user_info.get("email", "")
+
+    if not email.lower().endswith(f"@{ALLOWED_DOMAIN}"):
+        flash(f"Access denied for {email}. Only @{ALLOWED_DOMAIN} emails allowed.", "error")
+        return redirect(url_for("login"))
+
+    session.permanent = True
+    session["user"] = {"email": email, "name": user_info.get("name", email)}
+    return redirect(url_for("planner_page"))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# ---- App Routes ----
+
+@app.route("/")
+@login_required
+def index():
+    return redirect(url_for("planner_page"))
+
+
+@app.route("/planner")
+@login_required
+def planner_page():
+    return render_template("planner.html")
+
+
+# ---- API Routes ----
+
+@app.route("/api/deckle-jobs")
+@login_required
+def api_deckle_jobs():
+    try:
+        data = sheets.get_deckle_jobs()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/client-jobs")
+@login_required
+def api_client_jobs():
+    try:
+        data = sheets.get_client_jobs()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/refresh")
+@login_required
+def api_refresh():
+    sheets.clear_cache()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/export-plan", methods=["POST"])
+@login_required
+def api_export_plan():
+    body = request.get_json(force=True)
+    bpro_list = body.get("jobs", [])
+    plan_date = body.get("date", "")
+
+    if not bpro_list:
+        return jsonify({"error": "No jobs selected"}), 400
+
+    jobs = sheets.get_jobs_for_export(bpro_list)
+
+    # Build CSV — 9 columns matching daily plan format
+    header = "Deckle,BPRO to run,Item (Boards)To Manufacture,IPRO,ITEM CODE,CUSTOMER,Running Name,Item Qty To Mfg.,Remark"
+    lines = [header]
+    for job in jobs:
+        row = [
+            job["deckle"],
+            job["bpro"],
+            job["board_item"],
+            job["ipro"],
+            job["item_name"],
+            job["customer"],
+            job["running_name"],
+            job["qty"],
+            plan_date,
+        ]
+        # Escape commas in fields
+        escaped = []
+        for val in row:
+            val = str(val)
+            if "," in val or '"' in val:
+                val = '"' + val.replace('"', '""') + '"'
+            escaped.append(val)
+        lines.append(",".join(escaped))
+
+    csv_text = "\n".join(lines)
+    return jsonify({"csv": csv_text, "job_count": len(jobs), "date": plan_date})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5004, debug=True)

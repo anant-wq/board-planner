@@ -1,0 +1,373 @@
+{% extends "base.html" %}
+{% block title %}Planner — Board Planner{% endblock %}
+{% block content %}
+
+<!-- Summary Cards -->
+<div class="summary">
+    <div class="card">
+        <div class="label">Total Jobs</div>
+        <div class="value" id="total-jobs">—</div>
+    </div>
+    <div class="card">
+        <div class="label">Groups</div>
+        <div class="value" id="total-groups">—</div>
+    </div>
+    <div class="card">
+        <div class="label">Selected</div>
+        <div class="value" id="selected-count">0</div>
+    </div>
+</div>
+
+<!-- View Toggle + Toolbar -->
+<div class="toolbar">
+    <div class="view-switcher">
+        <button class="view-btn active" data-view="deckle" onclick="switchView('deckle')">Deckle View</button>
+        <button class="view-btn" data-view="client" onclick="switchView('client')">Client View</button>
+    </div>
+    <input type="text" id="search" class="search-input" placeholder="Search BPRO, customer, item..." oninput="filterJobs()">
+    <button class="btn btn-sm" onclick="refreshData()">Refresh</button>
+</div>
+
+<!-- Breadcrumbs -->
+<div class="breadcrumbs" id="breadcrumbs"></div>
+
+<!-- Job Groups Container -->
+<div id="groups-container"></div>
+
+<!-- Sticky Bottom Plan Builder -->
+<div class="plan-builder" id="plan-builder">
+    <div class="plan-left">
+        <strong><span id="plan-count">0</span> jobs selected</strong>
+    </div>
+    <div class="plan-right">
+        <input type="date" id="plan-date" class="plan-date">
+        <button class="btn btn-primary" onclick="exportCSV()">Export CSV</button>
+        <button class="btn btn-sm" onclick="copyToClipboard()">Copy</button>
+        <button class="btn btn-del btn-sm" onclick="clearSelection()">Clear</button>
+    </div>
+</div>
+
+<!-- Hidden textarea for CSV -->
+<textarea id="csv-output" style="display:none"></textarea>
+
+<script>
+// ---- State ----
+const selectedJobs = new Set();
+let deckleData = null;
+let clientData = null;
+let currentView = 'deckle';
+
+// Set default date to today
+document.getElementById('plan-date').valueAsDate = new Date();
+
+// ---- Data Fetching ----
+async function fetchDeckleJobs() {
+    const res = await fetch('{{ url_for("api_deckle_jobs") }}');
+    deckleData = await res.json();
+    return deckleData;
+}
+
+async function fetchClientJobs() {
+    const res = await fetch('{{ url_for("api_client_jobs") }}');
+    clientData = await res.json();
+    return clientData;
+}
+
+async function refreshData() {
+    await fetch('{{ url_for("api_refresh") }}');
+    deckleData = null;
+    clientData = null;
+    await loadView(currentView);
+}
+
+// ---- View Switching ----
+function switchView(view) {
+    currentView = view;
+    document.querySelectorAll('.view-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === view);
+    });
+    document.getElementById('search').value = '';
+    loadView(view);
+}
+
+async function loadView(view) {
+    const container = document.getElementById('groups-container');
+    container.innerHTML = '<p class="loading">Loading...</p>';
+
+    let data;
+    if (view === 'deckle') {
+        data = deckleData || await fetchDeckleJobs();
+    } else {
+        data = clientData || await fetchClientJobs();
+    }
+
+    document.getElementById('total-jobs').textContent = data.total_jobs;
+    document.getElementById('total-groups').textContent = data.groups.length;
+    renderGroups(data.groups, view);
+}
+
+// ---- Rendering ----
+function renderGroups(groups, view) {
+    const container = document.getElementById('groups-container');
+    const search = document.getElementById('search').value.toLowerCase();
+
+    let html = '';
+    for (const group of groups) {
+        const groupKey = view === 'deckle' ? group.deckle : group.client;
+        const groupLabel = view === 'deckle'
+            ? (group.deckle ? `Deckle ${group.deckle}"` : 'No Deckle Assigned')
+            : group.client;
+
+        // Filter jobs by search
+        const jobs = search
+            ? group.jobs.filter(j => matchesSearch(j, search))
+            : group.jobs;
+
+        if (jobs.length === 0) continue;
+
+        // Check if all jobs in group are selected
+        const allSelected = jobs.every(j => selectedJobs.has(j.bpro));
+
+        const groupId = 'group-' + (groupKey || 'none').replace(/[^a-zA-Z0-9]/g, '_');
+        html += `<details class="deckle-group" open id="${groupId}">
+            <summary class="group-header">
+                <label class="group-select" onclick="event.stopPropagation()">
+                    <input type="checkbox" ${allSelected ? 'checked' : ''}
+                        onchange="toggleGroup(this, '${groupKey}', '${view}')">
+                </label>
+                <span class="group-title">${groupLabel}</span>
+                <span class="group-meta">${jobs.length} jobs &middot; ${formatQty(group.total_qty)} pcs</span>
+            </summary>
+            <div class="group-body">
+                <table>
+                    <thead><tr>
+                        <th class="th-cb"></th>
+                        ${view === 'deckle' ? `
+                        <th>BPRO</th><th>Board Item</th><th>IPRO</th>
+                        <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th>
+                        ` : `
+                        <th>BPRO</th><th>Board Item</th><th>Item Name</th>
+                        <th>Running Name</th><th>Qty</th><th>Deckle</th><th>PRO Date</th><th>POC</th>
+                        `}
+                    </tr></thead>
+                    <tbody>`;
+
+        for (const job of jobs) {
+            const checked = selectedJobs.has(job.bpro) ? 'checked' : '';
+            if (view === 'deckle') {
+                html += `<tr class="${checked ? 'row-selected' : ''}">
+                    <td><input type="checkbox" ${checked} value="${job.bpro}" onchange="toggleJob(this)"></td>
+                    <td class="mono">${job.bpro}</td>
+                    <td class="td-item">${job.board_item}</td>
+                    <td class="mono">${job.ipro}</td>
+                    <td>${job.customer}</td>
+                    <td>${job.running_name}</td>
+                    <td class="td-qty">${job.qty}</td>
+                    <td>${job.pro_date}</td>
+                </tr>`;
+            } else {
+                html += `<tr class="${checked ? 'row-selected' : ''}">
+                    <td><input type="checkbox" ${checked} value="${job.bpro}" onchange="toggleJob(this)"></td>
+                    <td class="mono">${job.bpro}</td>
+                    <td class="td-item">${job.board_item}</td>
+                    <td class="td-item">${job.item_name}</td>
+                    <td>${job.running_name}</td>
+                    <td class="td-qty">${job.qty}</td>
+                    <td class="td-qty">${job.deckle}</td>
+                    <td>${job.pro_date}</td>
+                    <td>${job.poc_name || ''}</td>
+                </tr>`;
+            }
+        }
+
+        html += `</tbody></table></div></details>`;
+    }
+
+    container.innerHTML = html || '<p class="empty-state">No jobs found.</p>';
+    renderBreadcrumbs(groups, view);
+}
+
+function renderBreadcrumbs(groups, view) {
+    const bc = document.getElementById('breadcrumbs');
+    const search = document.getElementById('search').value.toLowerCase();
+    let html = '';
+    for (const group of groups) {
+        const groupKey = view === 'deckle' ? group.deckle : group.client;
+        const label = view === 'deckle'
+            ? (group.deckle ? group.deckle + '"' : 'N/A')
+            : group.client;
+        const jobs = search
+            ? group.jobs.filter(j => matchesSearch(j, search))
+            : group.jobs;
+        if (jobs.length === 0) continue;
+        // Count selected in this group
+        const selCount = jobs.filter(j => selectedJobs.has(j.bpro)).length;
+        const selBadge = selCount > 0 ? `<span class="bc-sel">${selCount}</span>` : '';
+        html += `<a class="bc-chip" href="#" onclick="scrollToGroup('${groupKey}', event)">${label} <span class="bc-count">${jobs.length}</span>${selBadge}</a>`;
+    }
+    bc.innerHTML = html;
+}
+
+function matchesSearch(job, query) {
+    const fields = [
+        job.bpro, job.board_item, job.item_name || '',
+        job.customer || '', job.client || '',
+        job.running_name || '', job.ipro || ''
+    ];
+    return fields.some(f => f.toLowerCase().includes(query));
+}
+
+// ---- Selection ----
+function toggleJob(checkbox) {
+    const bpro = checkbox.value;
+    if (checkbox.checked) {
+        selectedJobs.add(bpro);
+    } else {
+        selectedJobs.delete(bpro);
+    }
+    checkbox.closest('tr').classList.toggle('row-selected', checkbox.checked);
+    updatePlanCount();
+    updateGroupCheckboxes();
+    updateBreadcrumbSelection();
+}
+
+function toggleGroup(checkbox, groupKey, view) {
+    const data = view === 'deckle' ? deckleData : clientData;
+    const group = data.groups.find(g =>
+        view === 'deckle' ? g.deckle === groupKey : g.client === groupKey
+    );
+    if (!group) return;
+
+    for (const job of group.jobs) {
+        if (checkbox.checked) {
+            selectedJobs.add(job.bpro);
+        } else {
+            selectedJobs.delete(job.bpro);
+        }
+    }
+    updatePlanCount();
+    // Re-render to update row checkboxes
+    renderGroups(data.groups, view);
+}
+
+function clearSelection() {
+    selectedJobs.clear();
+    updatePlanCount();
+    const data = currentView === 'deckle' ? deckleData : clientData;
+    if (data) renderGroups(data.groups, currentView);
+}
+
+function updatePlanCount() {
+    const count = selectedJobs.size;
+    document.getElementById('plan-count').textContent = count;
+    document.getElementById('selected-count').textContent = count;
+    document.getElementById('plan-builder').classList.toggle('empty', count === 0);
+}
+
+function updateGroupCheckboxes() {
+    document.querySelectorAll('.group-select input[type="checkbox"]').forEach(cb => {
+        const details = cb.closest('details');
+        const rowCbs = details.querySelectorAll('tbody input[type="checkbox"]');
+        cb.checked = rowCbs.length > 0 && Array.from(rowCbs).every(r => r.checked);
+    });
+}
+
+// ---- Search/Filter ----
+function filterJobs() {
+    const data = currentView === 'deckle' ? deckleData : clientData;
+    if (data) renderGroups(data.groups, currentView);
+}
+
+// ---- CSV Export ----
+async function exportCSV() {
+    if (selectedJobs.size === 0) {
+        alert('No jobs selected');
+        return;
+    }
+
+    const planDate = document.getElementById('plan-date').value;
+    const res = await fetch('{{ url_for("api_export_plan") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({jobs: Array.from(selectedJobs), date: planDate})
+    });
+    const data = await res.json();
+
+    if (data.error) {
+        alert(data.error);
+        return;
+    }
+
+    // Download as file
+    const blob = new Blob([data.csv], {type: 'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `board-plan-${planDate || 'export'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+async function copyToClipboard() {
+    if (selectedJobs.size === 0) {
+        alert('No jobs selected');
+        return;
+    }
+
+    const planDate = document.getElementById('plan-date').value;
+    const res = await fetch('{{ url_for("api_export_plan") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({jobs: Array.from(selectedJobs), date: planDate})
+    });
+    const data = await res.json();
+
+    if (data.error) {
+        alert(data.error);
+        return;
+    }
+
+    // Copy tab-separated (better for pasting into Google Sheets)
+    const tsvLines = data.csv.split('\n').map(line => {
+        // Simple CSV to TSV conversion for clipboard
+        return line.replace(/,/g, '\t');
+    });
+    const tsv = tsvLines.join('\n');
+
+    try {
+        await navigator.clipboard.writeText(tsv);
+        const btn = document.querySelector('.plan-right .btn-sm');
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = orig, 1500);
+    } catch (e) {
+        alert('Copy failed. Try Export CSV instead.');
+    }
+}
+
+// ---- Breadcrumb selection update ----
+function updateBreadcrumbSelection() {
+    const data = currentView === 'deckle' ? deckleData : clientData;
+    if (data) renderBreadcrumbs(data.groups, currentView);
+}
+
+// ---- Scroll to group ----
+function scrollToGroup(groupKey, event) {
+    event.preventDefault();
+    const groupId = 'group-' + (groupKey || 'none').replace(/[^a-zA-Z0-9]/g, '_');
+    const el = document.getElementById(groupId);
+    if (el) {
+        el.open = true;
+        el.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+}
+
+// ---- Helpers ----
+function formatQty(n) {
+    return Number(n).toLocaleString('en-IN');
+}
+
+// ---- Init ----
+loadView('deckle');
+</script>
+{% endblock %}
