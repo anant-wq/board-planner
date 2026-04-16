@@ -190,7 +190,23 @@ def api_so_pending():
 @login_required
 def api_refresh():
     sheets.clear_cache()
-    return jsonify({"ok": True})
+    # Trigger immediate re-sync of all data sources in background
+    import threading
+    def _do_full_sync():
+        try:
+            data_sync.sync_fg_stock()
+            data_sync.sync_first_machine()
+            data_sync.sync_monthly_plan()
+            data_sync.sync_so_pending()
+            import history_db
+            from sheets import _parse_history
+            parsed = _parse_history()
+            history_db.save_history(parsed)
+            print("[refresh] Full sync complete")
+        except Exception as e:
+            print(f"[refresh] Sync error: {e}")
+    threading.Thread(target=_do_full_sync, daemon=True).start()
+    return jsonify({"ok": True, "message": "Refreshing all data sources..."})
 
 
 @app.route("/api/export-plan", methods=["POST"])

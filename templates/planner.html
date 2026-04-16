@@ -91,11 +91,18 @@ async function fetchHistory() {
 }
 
 async function refreshData() {
+    const btn = document.querySelector('.toolbar .btn-sm');
+    btn.textContent = 'Refreshing all sources...';
+    btn.disabled = true;
     await fetch('{{ url_for("api_refresh") }}');
     deckleData = null;
     clientData = null;
     historyData = null;
+    // Wait a moment for background sync to complete
+    await new Promise(r => setTimeout(r, 3000));
     await loadView(currentView);
+    btn.textContent = 'Refresh';
+    btn.disabled = false;
 }
 
 // ---- View Switching ----
