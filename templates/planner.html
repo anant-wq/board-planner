@@ -752,21 +752,34 @@ async function renderSelection(container) {
             <h4 class="sel-section-title">Pending BPROs (Selected)</h4>
             <table>
                 <thead><tr>
-                    <th>BPRO</th><th>Board Item</th><th>Paper Config</th><th>IPRO</th>
+                    <th>BPRO</th><th>Board Item</th><th>IPRO</th>
                     <th>Customer</th><th>Running Name</th><th>Qty</th><th>PRO Date</th>
+                    <th>FG</th><th>MP Pending</th><th>SO Pending</th>
                     <th></th>
                 </tr></thead><tbody>`;
+
+        // Build enrichment lookup from history data
+        const enrichLookup = {};
+        if (historyData && historyData.items) {
+            for (const it of historyData.items) {
+                if (it.item_name) enrichLookup[it.item_name] = it;
+                if (it.board_item) enrichLookup[it.board_item] = it;
+            }
+        }
+
         for (const j of jobs) {
-            const paper = extractPaperJS(j.board_item);
+            const enrich = enrichLookup[j.item_name] || enrichLookup[j.board_item] || {};
             html += `<tr>
                 <td class="mono">${j.bpro}</td>
                 <td class="td-item">${j.board_item}</td>
-                <td class="td-paper"><code>${paper}</code></td>
                 <td class="mono">${j.ipro}</td>
                 <td>${j.customer}</td>
                 <td>${j.running_name}</td>
                 <td class="td-qty">${j.qty}</td>
                 <td>${j.pro_date}</td>
+                <td class="td-qty">${(enrich.fg_qty||0) > 0 ? formatQty(enrich.fg_qty) : '—'}</td>
+                <td class="td-qty ${(enrich.mp_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(enrich.mp_pending_qty||0) > 0 ? formatQty(enrich.mp_pending_qty) : '—'}</td>
+                <td class="td-qty ${(enrich.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(enrich.so_pending_qty||0) > 0 ? formatQty(enrich.so_pending_qty) : '—'}</td>
                 <td><button class="btn btn-del btn-xs" onclick="removeSelJob('${j.bpro}')">x</button></td>
             </tr>`;
         }
