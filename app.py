@@ -14,6 +14,7 @@ from flask import (
 from authlib.integrations.flask_client import OAuth
 
 import sheets
+import data_sync
 
 
 # ---- Prefix middleware (app lives at /board-planner/ behind nginx) ----
@@ -278,6 +279,9 @@ def api_send_bpro_request():
         "results": results,
     })
 
+
+# Start background data sync
+data_sync.start_background_sync()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5008, debug=True)

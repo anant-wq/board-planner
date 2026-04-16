@@ -67,9 +67,9 @@ def _cached(key, fetcher, use_sqlite=False):
 def clear_cache():
     _cache.clear()
     import history_db
-    import erpnext
+    import data_sync
     history_db.force_resync()
-    erpnext.force_resync()
+    data_sync.force_resync_all()
 
 
 # ---- Deckle-pivot Auto line ----
@@ -399,22 +399,27 @@ def get_history_list():
                 agg["running_name"] = master.get("running_name", "") or agg["running_name"]
                 agg["item_name"] = master.get("item_name", "") or agg["item_name"]
 
-    # Get SO pending data and FG stock
-    import erpnext
-    so_summary = erpnext.get_so_summary()
-    fg_stock = erpnext.get_fg_stock()
+    # Get enrichment data from SQLite (synced in background)
+    import data_sync
+    so_summary = data_sync.get_so_pending()
+    fg_stock = data_sync.get_fg_stock()
+    monthly_plan = data_sync.get_monthly_plan()
+    first_machine = data_sync.get_first_machine()
 
     results = []
     for agg in board_agg.values():
         agg["avg_qty"] = round(agg["total_qty"] / agg["runs"]) if agg["runs"] else 0
         agg["last_run"] = agg["last_run"].strftime("%d/%m/%Y")
 
-        # Join SO pending data and FG stock by item_name
+        # Join all enrichment data by item_name
         item_name = agg.get("item_name", "")
         so = so_summary.get(item_name, {})
+        mp = monthly_plan.get(item_name, {})
         agg["so_pending_qty"] = so.get("pending_qty", 0)
         agg["so_count"] = so.get("so_count", 0)
         agg["fg_qty"] = fg_stock.get(item_name, 0)
+        agg["mp_pending_qty"] = mp.get("pending_monthly_plan", 0)
+        agg["first_machine"] = first_machine.get(item_name, "")
 
         results.append(agg)
 

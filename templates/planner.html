@@ -479,9 +479,11 @@ function scrollToGroup(groupKey, event) {
 // ---- History View ----
 function getPriority(it) {
     const hasSO = (it.so_pending_qty || 0) > 0;
+    const hasMP = (it.mp_pending_qty || 0) > 0;
+    const hasDemand = hasSO || hasMP;
     const highRuns = it.runs >= 3;
-    if (hasSO && highRuns) return 3; // high
-    if (hasSO || highRuns) return 2; // medium
+    if (hasDemand && highRuns) return 3; // high
+    if (hasDemand || highRuns) return 2; // medium
     return 1; // low
 }
 
@@ -526,7 +528,7 @@ function renderHistory(container, data) {
     // Filter
     items = items.filter(it => {
         if (it.runs < minRuns) return false;
-        if (filter === 'with_so' && !(it.so_pending_qty > 0)) return false;
+        if (filter === 'with_demand' && !(it.so_pending_qty > 0 || it.mp_pending_qty > 0)) return false;
         if (filter === 'no_bpro' && pendingBoards.has(it.board_item)) return false;
         return true;
     });
@@ -541,7 +543,7 @@ function renderHistory(container, data) {
     });
 
     // Count summary
-    const withSO = items.filter(it => (it.so_pending_qty || 0) > 0).length;
+    const withSO = items.filter(it => (it.so_pending_qty || 0) > 0 || (it.mp_pending_qty || 0) > 0).length;
     const noBPRO = items.filter(it => !pendingBoards.has(it.board_item)).length;
 
     // Group by deckle
@@ -566,7 +568,7 @@ function renderHistory(container, data) {
     let html = `<div class="hist-filters">
         <label>Filter: <select id="hist-filter" onchange="reRenderHistory()">
             <option value="all" ${filter==='all'?'selected':''}>All (${items.length})</option>
-            <option value="with_so" ${filter==='with_so'?'selected':''}>With Pending SOs (${withSO})</option>
+            <option value="with_demand" ${filter==='with_demand'?'selected':''}>With Pending Demand (${withSO})</option>
             <option value="no_bpro" ${filter==='no_bpro'?'selected':''}>No Active BPRO (${noBPRO})</option>
         </select></label>
         <label>Min Runs: <select id="hist-min-runs" onchange="reRenderHistory()">
@@ -596,26 +598,26 @@ function renderHistory(container, data) {
             </summary>
             <div class="group-body"><table>
                 <thead><tr>
-                    <th></th><th>Board Item</th><th>Paper Config</th>
-                    <th>Customer</th><th>Running Name</th>
-                    <th>Runs</th><th>Total Qty</th><th>Last Run</th>
-                    <th>FG Stock</th><th>SO Pending</th><th>SOs</th>
+                    <th></th><th>Board Item</th>
+                    <th>Customer</th><th>Running Name</th><th>1st Machine</th>
+                    <th>Runs</th><th>Last Run</th>
+                    <th>FG</th><th>MP Pending</th><th>SO Pending</th>
                 </tr></thead><tbody>`;
         for (const it of groupItems) {
             const p = getPriority(it);
-            const soClass = (it.so_pending_qty || 0) > 0 ? ' row-has-so' : '';
-            html += `<tr class="${soClass}">
+            const hasDemand = (it.so_pending_qty || 0) > 0 || (it.mp_pending_qty || 0) > 0;
+            const demandClass = hasDemand ? ' row-has-so' : '';
+            html += `<tr class="${demandClass}">
                 <td>${getPriorityDot(p)}</td>
                 <td class="td-item">${it.board_item}</td>
-                <td class="td-paper"><code>${it.paper}</code></td>
                 <td>${it.customer}</td>
                 <td>${it.running_name}</td>
+                <td>${it.first_machine || '—'}</td>
                 <td class="td-qty">${it.runs}</td>
-                <td class="td-qty">${formatQty(it.total_qty)}</td>
                 <td>${it.last_run}</td>
                 <td class="td-qty">${(it.fg_qty||0) > 0 ? formatQty(it.fg_qty) : '—'}</td>
+                <td class="td-qty ${(it.mp_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.mp_pending_qty||0) > 0 ? formatQty(it.mp_pending_qty) : '—'}</td>
                 <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
-                <td class="td-qty">${(it.so_count||0) > 0 ? it.so_count : '—'}</td>
             </tr>`;
         }
         html += '</tbody></table></div></details>';
@@ -808,29 +810,29 @@ function renderMissingTable(items) {
     let html = `<table class="missing-table">
         <thead><tr>
             <th class="th-cb"></th>
-            <th></th><th>Board Item</th><th>Paper Config</th>
-            <th>Customer</th><th>Running Name</th>
-            <th>Runs (90d)</th><th>Total Qty</th><th>Last Run</th>
-            <th>FG Stock</th><th>SO Pending</th><th>SOs</th>
+            <th></th><th>Board Item</th>
+            <th>Customer</th><th>Running Name</th><th>1st Machine</th>
+            <th>Runs</th><th>Last Run</th>
+            <th>FG</th><th>MP Pending</th><th>SO Pending</th>
         </tr></thead><tbody>`;
     for (const it of items) {
         const key = it.board_item + '|' + it.customer;
         const checked = flaggedHistory.has(key) ? 'checked' : '';
         const p = getPriority(it);
-        const soClass = (it.so_pending_qty || 0) > 0 ? ' row-has-so' : '';
-        html += `<tr class="${checked ? 'row-flagged' : ''}${soClass}">
+        const hasDemand = (it.so_pending_qty || 0) > 0 || (it.mp_pending_qty || 0) > 0;
+        const demandClass = hasDemand ? ' row-has-so' : '';
+        html += `<tr class="${checked ? 'row-flagged' : ''}${demandClass}">
             <td><input type="checkbox" ${checked} data-key="${escHtml(key)}" data-board="${escHtml(it.board_item)}" data-customer="${escHtml(it.customer)}" data-running="${escHtml(it.running_name)}" data-paper="${escHtml(it.paper)}" data-runs="${it.runs}" data-lastrun="${it.last_run}" onchange="toggleFlag(this)"></td>
             <td>${getPriorityDot(p)}</td>
             <td class="td-item">${it.board_item}</td>
-            <td class="td-paper"><code>${it.paper}</code></td>
             <td>${it.customer}</td>
             <td>${it.running_name}</td>
+            <td>${it.first_machine || '—'}</td>
             <td class="td-qty">${it.runs}</td>
-            <td class="td-qty">${formatQty(it.total_qty)}</td>
             <td>${it.last_run}</td>
             <td class="td-qty">${(it.fg_qty||0) > 0 ? formatQty(it.fg_qty) : '—'}</td>
+            <td class="td-qty ${(it.mp_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.mp_pending_qty||0) > 0 ? formatQty(it.mp_pending_qty) : '—'}</td>
             <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
-            <td class="td-qty">${(it.so_count||0) > 0 ? it.so_count : '—'}</td>
         </tr>`;
     }
     html += '</tbody></table>';
