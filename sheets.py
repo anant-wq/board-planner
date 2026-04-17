@@ -133,36 +133,34 @@ def get_deckle_jobs():
 # ---- Client-pivot autoline ----
 
 def _parse_client_pivot():
-    rows = _read_sheet("client-pivot autoline")
-    if len(rows) < 2:
-        return {"groups": [], "total_jobs": 0}
+    """Build client view from deckle-pivot data (same source as deckle view).
 
+    The old 'client-pivot autoline' tab in the sheet is a manually-built pivot
+    that goes stale — it misses many rows. We derive the client view from the
+    same data that populates the deckle view so they stay in sync.
+    """
+    deckle_data = _parse_deckle_pivot()
     groups = {}
-    current_client = ""
 
-    for row in rows[1:]:
-        if not row or not _col(row, 2):  # skip empty rows (no BPRO)
-            continue
-
-        client_val = _col(row, 0)
-        if client_val:
-            current_client = client_val
-
-        job = {
-            "client": current_client,
-            "pro_date": _col(row, 1),
-            "bpro": _col(row, 2),
-            "board_item": _col(row, 3),
-            "item_name": _col(row, 4),
-            "running_name": _col(row, 5),
-            "qty": _col(row, 6),
-            "deckle": _col(row, 7),
-            "poc_name": _col(row, 9),
-        }
-
-        if current_client not in groups:
-            groups[current_client] = []
-        groups[current_client].append(job)
+    for dg in deckle_data["groups"]:
+        for dj in dg["jobs"]:
+            client = dj.get("customer", "").strip()
+            if not client:
+                continue
+            job = {
+                "client": client,
+                "pro_date": dj.get("pro_date", ""),
+                "bpro": dj.get("bpro", ""),
+                "board_item": dj.get("board_item", ""),
+                "item_name": dj.get("item_name", ""),
+                "running_name": dj.get("running_name", ""),
+                "qty": dj.get("qty", ""),
+                "deckle": dg["deckle"],
+                "poc_name": "",  # not available in deckle-pivot source
+            }
+            if client not in groups:
+                groups[client] = []
+            groups[client].append(job)
 
     sorted_groups = []
     for client in sorted(groups.keys()):
