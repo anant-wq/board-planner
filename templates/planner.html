@@ -184,6 +184,7 @@ function renderGroups(groups, view) {
                 </label>
                 <span class="group-title">${groupLabel}</span>
                 <span class="group-meta">${jobs.length} jobs &middot; ${formatQty(group.total_qty)} pcs</span>
+                ${view === 'deckle' && group.deckle ? `<a href="/deckle-page?deckle=${encodeURIComponent(group.deckle)}" target="_blank" class="btn btn-sm btn-fullpage" onclick="event.stopPropagation()">Full Page &#x2197;</a>` : ''}
             </summary>
             <div class="group-body">
                 <table>

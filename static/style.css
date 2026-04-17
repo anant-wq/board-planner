@@ -155,6 +155,8 @@ nav {
 .btn-email { background: #0d6efd; }
 .btn-email:hover { background: #0b5ed7; }
 .btn-email:disabled { background: #6c757d; cursor: not-allowed; opacity: 0.6; }
+.btn-fullpage { background: #198754; margin-left: auto; text-decoration: none; }
+.btn-fullpage:hover { background: #157347; }
 
 /* Priority dots */
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }

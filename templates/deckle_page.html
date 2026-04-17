@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+{% block title %}Deckle {{ deckle }}" — Production Plan{% endblock %}
+{% block content %}
+
+<div class="detail-header">
+    <a href="{{ url_for('planner_page') }}" class="btn btn-sm">&larr; Back to Planner</a>
+    <h2>Deckle {{ deckle }}" — Production Plan</h2>
+    <div id="summary-info" class="ref-info"></div>
+</div>
+
+<div class="toolbar" style="margin: 1rem 0;">
+    <label>Plan Date: <input type="date" id="plan-date" class="plan-date"></label>
+    <button class="btn btn-primary" onclick="exportCSV()">Export CSV</button>
+    <button class="btn btn-sm" onclick="copyTSV()">Copy TSV</button>
+    <button class="btn btn-email btn-sm" id="send-demand-btn" disabled onclick="sendDemandWA()">Send Demand WhatsApp</button>
+</div>
+
+<div id="loading" class="loading">Loading...</div>
+
+<div id="page-content" style="display:none">
+
+    <!-- Section 1: Pending BPROs -->
+    <details class="deckle-group" open id="sec1">
+        <summary class="group-header">
+            <span class="group-title">1. Pending BPROs (Active Production Orders)</span>
+            <span class="group-meta" id="sec1-meta"></span>
+        </summary>
+        <div class="group-body">
+            <p class="empty-hint">Uncheck rows to exclude from today's run. Paper sections 3 & 4 will recalculate.</p>
+            <table>
+                <thead><tr>
+                    <th class="th-cb"><input type="checkbox" id="sec1-all" checked onchange="toggleAllSec1(this)"></th>
+                    <th>BPRO</th><th>Board Item</th><th>IPRO</th>
+                    <th>Customer</th><th>Running Name</th>
+                    <th>Qty</th><th>PRO Date</th>
+                    <th>1st Machine</th><th>FG</th>
+                    <th>MP Pending</th><th>SO Pending</th>
+                </tr></thead>
+                <tbody id="sec1-body"></tbody>
+            </table>
+        </div>
+    </details>
+
+    <!-- Section 2: Demand Without BPRO -->
+    <details class="deckle-group" open id="sec2">
+        <summary class="group-header">
+            <span class="group-title">2. Demand Without BPRO (MPV3 or SOV3 pending)</span>
+            <span class="group-meta" id="sec2-meta"></span>
+        </summary>
+        <div class="group-body">
+            <p class="empty-hint">These items have pending demand but no active BPRO. Tick to include in the WhatsApp request.</p>
+            <table>
+                <thead><tr>
+                    <th class="th-cb"></th>
+                    <th>Item Code</th><th>Board Item</th>
+                    <th>Customer</th><th>Running Name</th>
+                    <th>1st Machine</th><th>FG</th>
+                    <th>MP Pending</th><th>SO Pending</th>
+                    <th>Last Run</th>
+                </tr></thead>
+                <tbody id="sec2-body"></tbody>
+            </table>
+        </div>
+    </details>
+
+    <!-- Section 3: Same Paper -->
+    <details class="deckle-group" id="sec3">
+        <summary class="group-header same-paper">
+            <span class="group-title">3. 90-Day History — Same Paper (no BPRO, no demand)</span>
+            <span class="group-meta" id="sec3-meta"></span>
+        </summary>
+        <div class="group-body" id="sec3-body"></div>
+    </details>
+
+    <!-- Section 4: Different Paper -->
+    <details class="deckle-group" id="sec4">
+        <summary class="group-header diff-paper">
+            <span class="group-title">4. 90-Day History — Different Paper (no BPRO, no demand)</span>
+            <span class="group-meta" id="sec4-meta"></span>
+        </summary>
+        <div class="group-body" id="sec4-body"></div>
+    </details>
+
+</div>
+
+<script>
+const deckle = "{{ deckle }}";
+let pageData = null;
+const excludedBpros = new Set();
+
+document.getElementById('plan-date').valueAsDate = new Date();
+
+function formatQty(n) {
+    return Number(n).toLocaleString('en-IN');
+}
+
+function escHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+async function loadPage() {
+    const res = await fetch(`{{ url_for("api_deckle_page") }}?deckle=${encodeURIComponent(deckle)}`);
+    const data = await res.json();
+    if (data.error) {
+        document.getElementById('loading').textContent = 'Error: ' + data.error;
+        return;
+    }
+    pageData = data;
+    document.getElementById('summary-info').innerHTML =
+        `<strong>${data.section1_pending.length}</strong> pending BPROs &middot; ` +
+        `<strong>${data.section2_demand.length}</strong> items need BPRO &middot; ` +
+        `<strong>${data.paper_configs.length}</strong> paper configs`;
+    renderAll();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('page-content').style.display = 'block';
+}
+
+function renderAll() {
+    renderSection1();
+    renderSection2();
+    renderSection34();
+}
+
+function renderSection1() {
+    const jobs = pageData.section1_pending;
+    let totalQty = 0;
+    let html = '';
+    for (const j of jobs) {
+        const excluded = excludedBpros.has(j.bpro);
+        if (!excluded) { try { totalQty += parseInt(j.qty) || 0; } catch(e) {} }
+        html += `<tr class="${excluded ? 'row-excluded' : ''}">
+            <td><input type="checkbox" ${excluded ? '' : 'checked'} value="${j.bpro}" onchange="toggleSec1Job(this)"></td>
+            <td class="mono">${j.bpro}</td>
+            <td class="td-item">${j.board_item}</td>
+            <td class="mono">${j.ipro}</td>
+            <td>${j.customer}</td>
+            <td>${j.running_name}</td>
+            <td class="td-qty">${j.qty}</td>
+            <td>${j.pro_date}</td>
+            <td>${j.first_machine || '—'}</td>
+            <td class="td-qty">${(j.fg_qty||0) > 0 ? formatQty(j.fg_qty) : '—'}</td>
+            <td class="td-qty ${(j.mp_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(j.mp_pending_qty||0) > 0 ? formatQty(j.mp_pending_qty) : '—'}</td>
+            <td class="td-qty ${(j.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(j.so_pending_qty||0) > 0 ? formatQty(j.so_pending_qty) : '—'}</td>
+        </tr>`;
+    }
+    document.getElementById('sec1-body').innerHTML = html;
+    const includedCount = jobs.length - excludedBpros.size;
+    document.getElementById('sec1-meta').textContent = `${includedCount} included / ${jobs.length} total &middot; ${formatQty(totalQty)} pcs`;
+}
+
+function renderSection2() {
+    const items = pageData.section2_demand;
+    let html = '';
+    for (const it of items) {
+        const key = it.item_name;
+        html += `<tr>
+            <td><input type="checkbox" data-item="${escHtml(it.item_name)}" data-customer="${escHtml(it.customer)}" data-running="${escHtml(it.running_name)}" data-mp="${it.mp_pending_qty}" data-so="${it.so_pending_qty}" data-fg="${it.fg_qty}" data-board="${escHtml(it.board_item)}" onchange="updateDemandBtn()"></td>
+            <td class="td-item">${it.item_name}</td>
+            <td class="td-item">${it.board_item}</td>
+            <td>${it.customer}</td>
+            <td>${it.running_name}</td>
+            <td>${it.first_machine || '—'}</td>
+            <td class="td-qty">${(it.fg_qty||0) > 0 ? formatQty(it.fg_qty) : '—'}</td>
+            <td class="td-qty ${(it.mp_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.mp_pending_qty||0) > 0 ? formatQty(it.mp_pending_qty) : '—'}</td>
+            <td class="td-qty ${(it.so_pending_qty||0) > 0 ? 'so-highlight' : ''}">${(it.so_pending_qty||0) > 0 ? formatQty(it.so_pending_qty) : '—'}</td>
+            <td>${it.last_run}</td>
+        </tr>`;
+    }
+    document.getElementById('sec2-body').innerHTML = html;
+    document.getElementById('sec2-meta').textContent = `${items.length} items`;
+}
+
+function renderSection34() {
+    // Compute effective paper set from INCLUDED pending BPROs only
+    const paperSet = new Set();
+    for (const j of pageData.section1_pending) {
+        if (!excludedBpros.has(j.bpro) && j.paper) {
+            paperSet.add(j.paper);
+        }
+    }
+
+    // Merge section3 + section4 from backend, re-split by current paperSet
+    const allMissing = [...pageData.section3_same_paper, ...pageData.section4_diff_paper];
+    const same = [];
+    const diff = [];
+    for (const it of allMissing) {
+        if (it.paper && paperSet.has(it.paper)) {
+            same.push(it);
+        } else {
+            diff.push(it);
+        }
+    }
+
+    document.getElementById('sec3-body').innerHTML = renderHistTable(same);
+    document.getElementById('sec3-meta').textContent = `${same.length} items`;
+    document.getElementById('sec4-body').innerHTML = renderHistTable(diff);
+    document.getElementById('sec4-meta').textContent = `${diff.length} items`;
+}
+
+function renderHistTable(items) {
+    if (items.length === 0) return '<p class="empty-hint">No items.</p>';
+    let html = `<table>
+        <thead><tr>
+            <th>Board Item</th><th>Paper Config</th>
+            <th>Customer</th><th>Running Name</th>
+            <th>1st Machine</th><th>Runs</th><th>Last Run</th>
+            <th>FG</th>
+        </tr></thead><tbody>`;
+    for (const it of items) {
+        html += `<tr>
+            <td class="td-item">${it.board_item}</td>
+            <td class="td-paper"><code>${it.paper}</code></td>
+            <td>${it.customer}</td>
+            <td>${it.running_name}</td>
+            <td>${it.first_machine || '—'}</td>
+            <td class="td-qty">${it.runs}</td>
+            <td>${it.last_run}</td>
+            <td class="td-qty">${(it.fg_qty||0) > 0 ? formatQty(it.fg_qty) : '—'}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function toggleSec1Job(cb) {
+    const bpro = cb.value;
+    if (cb.checked) excludedBpros.delete(bpro);
+    else excludedBpros.add(bpro);
+    cb.closest('tr').classList.toggle('row-excluded', !cb.checked);
+    renderSection1();
+    renderSection34();
+}
+
+function toggleAllSec1(master) {
+    if (master.checked) excludedBpros.clear();
+    else {
+        for (const j of pageData.section1_pending) excludedBpros.add(j.bpro);
+    }
+    renderSection1();
+    renderSection34();
+}
+
+function buildCSVRows() {
+    const included = pageData.section1_pending.filter(j => !excludedBpros.has(j.bpro));
+    const planDate = document.getElementById('plan-date').value;
+    const header = 'Deckle,BPRO to run,Item (Boards)To Manufacture,IPRO,ITEM CODE,CUSTOMER,Running Name,Item Qty To Mfg.,Remark';
+    const lines = [header];
+    for (const j of included) {
+        const row = [
+            deckle, j.bpro, j.board_item, j.ipro,
+            j.item_name, j.customer, j.running_name, j.qty, planDate
+        ];
+        const escaped = row.map(v => {
+            v = String(v);
+            if (v.includes(',') || v.includes('"')) v = '"' + v.replace(/"/g,'""') + '"';
+            return v;
+        });
+        lines.push(escaped.join(','));
+    }
+    return lines.join('\n');
+}
+
+function exportCSV() {
+    const csv = buildCSVRows();
+    const planDate = document.getElementById('plan-date').value || 'export';
+    const blob = new Blob([csv], {type: 'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `deckle-${deckle}-${planDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+async function copyTSV() {
+    const csv = buildCSVRows();
+    const tsv = csv.split('\n').map(line => {
+        // Simple CSV→TSV conversion (no quoted commas in daily plan data)
+        return line.replace(/,/g, '\t');
+    }).join('\n');
+    try {
+        await navigator.clipboard.writeText(tsv);
+        alert('Copied to clipboard — paste directly into daily plan sheet');
+    } catch (e) {
+        alert('Copy failed. Try Export CSV.');
+    }
+}
+
+function updateDemandBtn() {
+    const btn = document.getElementById('send-demand-btn');
+    const count = document.querySelectorAll('#sec2-body input[type=checkbox]:checked').length;
+    btn.textContent = count > 0 ? `Send Demand WhatsApp (${count})` : 'Send Demand WhatsApp';
+    btn.disabled = count === 0;
+}
+
+async function sendDemandWA() {
+    const checks = document.querySelectorAll('#sec2-body input[type=checkbox]:checked');
+    if (checks.length === 0) return;
+    if (!confirm(`Send demand request for ${checks.length} item(s) to WhatsApp groups?`)) return;
+
+    const byCustomer = {};
+    checks.forEach(cb => {
+        const cust = cb.dataset.customer || 'Unknown';
+        if (!byCustomer[cust]) byCustomer[cust] = [];
+        byCustomer[cust].push({
+            item: cb.dataset.item,
+            board: cb.dataset.board,
+            running: cb.dataset.running,
+            mp: cb.dataset.mp,
+            so: cb.dataset.so,
+            fg: cb.dataset.fg,
+        });
+    });
+
+    const planDate = document.getElementById('plan-date').value || new Date().toLocaleDateString('en-IN');
+    let msg = `📋 *BPRO Request — Deckle ${deckle}" — ${planDate}*\n\n`;
+    msg += `${checks.length} item(s) with pending MP/SO demand need BPROs created.\n\n`;
+    for (const [cust, items] of Object.entries(byCustomer)) {
+        msg += `*--- ${cust} ---*\n`;
+        for (const it of items) {
+            msg += `${it.item}\n`;
+            msg += `MP: ${it.mp} | SO: ${it.so} | FG: ${it.fg}\n`;
+            if (it.running) msg += `Running: ${it.running}\n`;
+            msg += '\n';
+        }
+    }
+
+    const btn = document.getElementById('send-demand-btn');
+    btn.textContent = 'Sending...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('{{ url_for("api_send_bpro_request") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: msg})
+        });
+        const data = await res.json();
+        alert(data.ok ? data.message : 'Failed: ' + (data.error || 'Unknown error'));
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+    updateDemandBtn();
+}
+
+loadPage();
+</script>
+
+<style>
+.row-excluded { opacity: 0.4; text-decoration: line-through; }
+.group-header.same-paper { background: #d4edda; color: #155724; }
+.group-header.diff-paper { background: #fff3cd; color: #856404; }
+</style>
+
+{% endblock %}

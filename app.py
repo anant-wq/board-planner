@@ -165,6 +165,26 @@ def detail_page():
     return render_template("detail.html", deckle=deckle, ref_bpro=ref_bpro)
 
 
+@app.route("/deckle-page")
+@login_required
+def deckle_page():
+    deckle = request.args.get("deckle", "")
+    return render_template("deckle_page.html", deckle=deckle)
+
+
+@app.route("/api/deckle-page")
+@login_required
+def api_deckle_page():
+    deckle = request.args.get("deckle", "")
+    if not deckle:
+        return jsonify({"error": "deckle parameter required"}), 400
+    try:
+        data = sheets.get_deckle_page(deckle)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/history")
 @login_required
 def api_history():

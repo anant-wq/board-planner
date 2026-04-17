@@ -541,3 +541,154 @@ def get_deckle_detail(deckle, reference_bpro=None):
         "missing_same_paper": missing_same,
         "missing_diff_paper": missing_diff,
     }
+
+
+def get_deckle_page(deckle):
+    """Full production plan for a single deckle — 4 sections.
+
+    Section 1: All pending BPROs at this deckle (irrespective of paper)
+    Section 2: Items with MPV3/SOV3 pending demand, at this deckle, no active BPRO
+    Section 3: 90-day history at this deckle, no BPRO, no MP/SO demand, same paper as Section 1
+    Section 4: Same as Section 3 but different paper
+    """
+    import data_sync
+
+    # Enrichment lookups
+    so_summary = data_sync.get_so_pending()
+    fg_stock = data_sync.get_fg_stock()
+    monthly_plan = data_sync.get_monthly_plan()
+    first_machine = data_sync.get_first_machine()
+
+    def enrich(item_name):
+        so = so_summary.get(item_name, {})
+        mp = monthly_plan.get(item_name, {})
+        return {
+            "fg_qty": fg_stock.get(item_name, 0),
+            "mp_pending_qty": mp.get("pending_monthly_plan", 0),
+            "so_pending_qty": so.get("pending_qty", 0),
+            "so_count": so.get("so_count", 0),
+            "first_machine": first_machine.get(item_name, ""),
+        }
+
+    # ---- Section 1: Pending BPROs at this deckle ----
+    deckle_data = get_deckle_jobs()
+    pending_jobs = []
+    for group in deckle_data["groups"]:
+        if group["deckle"] == deckle:
+            pending_jobs = group["jobs"]
+            break
+
+    pending_board_items = {j["board_item"] for j in pending_jobs if j.get("board_item")}
+    pending_item_names = {j.get("item_name", "") for j in pending_jobs if j.get("item_name")}
+
+    section1 = []
+    for j in pending_jobs:
+        entry = dict(j)
+        entry["paper"] = extract_paper(j.get("board_item", ""))
+        entry["flute"] = extract_flute(j.get("board_item", ""))
+        entry.update(enrich(j.get("item_name", "")))
+        section1.append(entry)
+
+    # Paper configs from all pending BPROs (frontend will recalculate from checked ones)
+    all_paper_configs = sorted({s["paper"] for s in section1 if s["paper"]})
+
+    # ---- Build history lookup for this deckle ----
+    history = get_history()
+    bpro_master = get_bpro_master()
+    hist_entries = history.get(deckle, {})
+
+    # Map board_item at this deckle → aggregated history entry
+    hist_by_board = {}
+    for bpro, entry in hist_entries.items():
+        master = bpro_master.get(bpro, {})
+        board_item = master.get("board_item", "")
+        item_name = master.get("item_name", "")
+        if not board_item:
+            continue
+        if board_item in hist_by_board:
+            h = hist_by_board[board_item]
+            h["runs"] += entry["runs"]
+            h["total_qty"] += entry["total_qty"]
+            if entry["last_run"] > h["last_run"]:
+                h["last_run"] = entry["last_run"]
+        else:
+            hist_by_board[board_item] = {
+                "bpro": bpro,
+                "board_item": board_item,
+                "item_name": item_name,
+                "customer": master.get("customer", ""),
+                "running_name": master.get("running_name", ""),
+                "paper": extract_paper(board_item),
+                "runs": entry["runs"],
+                "total_qty": entry["total_qty"],
+                "last_run": entry["last_run"],
+            }
+
+    # ---- Section 2: Demand Without BPRO ----
+    # Items with MP or SO pending demand, at this deckle (from history), no active BPRO
+    section2 = []
+    section2_item_names = set()
+    for board_item, h in hist_by_board.items():
+        if board_item in pending_board_items:
+            continue
+        item_name = h.get("item_name", "")
+        if not item_name:
+            continue
+        enrich_data = enrich(item_name)
+        has_demand = enrich_data["mp_pending_qty"] > 0 or enrich_data["so_pending_qty"] > 0
+        if not has_demand:
+            continue
+        entry = {
+            "item_name": item_name,
+            "board_item": board_item,
+            "customer": h.get("customer", ""),
+            "running_name": h.get("running_name", ""),
+            "paper": h.get("paper", ""),
+            "runs": h["runs"],
+            "last_run": h["last_run"].strftime("%d/%m/%Y"),
+            **enrich_data,
+        }
+        section2.append(entry)
+        section2_item_names.add(item_name)
+
+    # Sort Section 2 by demand priority: SO pending + MP pending
+    section2.sort(key=lambda x: (x["so_pending_qty"] + x["mp_pending_qty"]), reverse=True)
+
+    # ---- Sections 3 & 4: 90-day history, no BPRO, no demand, split by paper ----
+    paper_set = set(all_paper_configs)
+    section3 = []  # same paper
+    section4 = []  # different paper
+    for board_item, h in hist_by_board.items():
+        if board_item in pending_board_items:
+            continue
+        item_name = h.get("item_name", "")
+        if item_name in section2_item_names:
+            continue  # already in Section 2 (has MP/SO demand)
+
+        enrich_data = enrich(item_name)
+        entry = {
+            "item_name": item_name,
+            "board_item": board_item,
+            "customer": h.get("customer", ""),
+            "running_name": h.get("running_name", ""),
+            "paper": h.get("paper", ""),
+            "runs": h["runs"],
+            "last_run": h["last_run"].strftime("%d/%m/%Y"),
+            **enrich_data,
+        }
+        if entry["paper"] and entry["paper"] in paper_set:
+            section3.append(entry)
+        else:
+            section4.append(entry)
+
+    section3.sort(key=lambda x: x["runs"], reverse=True)
+    section4.sort(key=lambda x: x["runs"], reverse=True)
+
+    return {
+        "deckle": deckle,
+        "paper_configs": all_paper_configs,
+        "section1_pending": section1,
+        "section2_demand": section2,
+        "section3_same_paper": section3,
+        "section4_diff_paper": section4,
+    }
