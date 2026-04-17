@@ -19,6 +19,9 @@
 
 <div id="page-content" style="display:none">
 
+    <!-- Paper breadcrumbs (filter all sections) -->
+    <div class="breadcrumbs paper-breadcrumbs" id="paper-breadcrumbs"></div>
+
     <!-- Section 1: Pending BPROs -->
     <details class="deckle-group" open id="sec1">
         <summary class="group-header">
@@ -87,6 +90,7 @@
 const deckle = "{{ deckle }}";
 let pageData = null;
 const excludedBpros = new Set();
+const hiddenPapers = new Set();  // papers unticked in breadcrumbs → rows hidden
 
 document.getElementById('plan-date').valueAsDate = new Date();
 
@@ -116,13 +120,73 @@ async function loadPage() {
 }
 
 function renderAll() {
+    renderBreadcrumbs();
     renderSection1();
     renderSection2();
     renderSection34();
 }
 
+function getAllPapers() {
+    // Union of all paper configs across all 4 sections
+    const set = new Set();
+    for (const j of pageData.section1_pending) if (j.paper) set.add(j.paper);
+    for (const it of pageData.section2_demand) if (it.paper) set.add(it.paper);
+    for (const it of pageData.section3_same_paper) if (it.paper) set.add(it.paper);
+    for (const it of pageData.section4_diff_paper) if (it.paper) set.add(it.paper);
+    return Array.from(set).sort();
+}
+
+function renderBreadcrumbs() {
+    const papers = getAllPapers();
+    const bc = document.getElementById('paper-breadcrumbs');
+    if (papers.length === 0) { bc.innerHTML = ''; return; }
+
+    // Count rows per paper across all sections
+    const counts = {};
+    for (const p of papers) counts[p] = 0;
+    const addCount = list => { for (const it of list) if (it.paper && counts[it.paper] !== undefined) counts[it.paper]++; };
+    addCount(pageData.section1_pending);
+    addCount(pageData.section2_demand);
+    addCount(pageData.section3_same_paper);
+    addCount(pageData.section4_diff_paper);
+
+    let html = '<strong style="margin-right:8px;font-size:0.85rem;color:#555">Papers:</strong>';
+    html += `<label class="bc-chip bc-check" onclick="event.stopPropagation()" style="background:#e9ecef">
+        <input type="checkbox" ${hiddenPapers.size === 0 ? 'checked' : ''} onchange="toggleAllPapers(this)">
+        All <span class="bc-count">${papers.length}</span>
+    </label>`;
+    for (const p of papers) {
+        const checked = !hiddenPapers.has(p);
+        html += `<label class="bc-chip bc-check" onclick="event.stopPropagation()" title="${p}">
+            <input type="checkbox" ${checked ? 'checked' : ''} onchange="togglePaper(this, '${p}')">
+            <code>${p}</code> <span class="bc-count">${counts[p]}</span>
+        </label>`;
+    }
+    bc.innerHTML = html;
+}
+
+function togglePaper(cb, paper) {
+    if (cb.checked) hiddenPapers.delete(paper);
+    else hiddenPapers.add(paper);
+    renderAll();
+}
+
+function toggleAllPapers(cb) {
+    if (cb.checked) hiddenPapers.clear();
+    else {
+        for (const p of getAllPapers()) hiddenPapers.add(p);
+    }
+    renderAll();
+}
+
+function isPaperVisible(paper) {
+    // Empty paper = show (not filterable)
+    if (!paper) return true;
+    return !hiddenPapers.has(paper);
+}
+
 function renderSection1() {
-    const jobs = pageData.section1_pending;
+    const jobs = pageData.section1_pending.filter(j => isPaperVisible(j.paper));
     let totalQty = 0;
     let html = '';
     for (const j of jobs) {
@@ -144,12 +208,16 @@ function renderSection1() {
         </tr>`;
     }
     document.getElementById('sec1-body').innerHTML = html;
-    const includedCount = jobs.length - excludedBpros.size;
-    document.getElementById('sec1-meta').textContent = `${includedCount} included / ${jobs.length} total &middot; ${formatQty(totalQty)} pcs`;
+    // Count visible+included (excludedBpros may reference hidden rows)
+    const visibleExcluded = jobs.filter(j => excludedBpros.has(j.bpro)).length;
+    const includedCount = jobs.length - visibleExcluded;
+    const totalInData = pageData.section1_pending.length;
+    const filterNote = jobs.length < totalInData ? ` (filtered from ${totalInData})` : '';
+    document.getElementById('sec1-meta').innerHTML = `${includedCount} included / ${jobs.length} shown${filterNote} &middot; ${formatQty(totalQty)} pcs`;
 }
 
 function renderSection2() {
-    const items = pageData.section2_demand;
+    const items = pageData.section2_demand.filter(it => isPaperVisible(it.paper));
     let html = '';
     for (const it of items) {
         const key = it.item_name;
@@ -167,7 +235,9 @@ function renderSection2() {
         </tr>`;
     }
     document.getElementById('sec2-body').innerHTML = html;
-    document.getElementById('sec2-meta').textContent = `${items.length} items`;
+    const totalInData = pageData.section2_demand.length;
+    const filterNote = items.length < totalInData ? ` (filtered from ${totalInData})` : '';
+    document.getElementById('sec2-meta').textContent = `${items.length} items${filterNote}`;
 }
 
 function renderSection34() {
@@ -179,11 +249,13 @@ function renderSection34() {
         }
     }
 
-    // Merge section3 + section4 from backend, re-split by current paperSet
+    // Merge section3 + section4 from backend, re-split by current paperSet,
+    // and apply paper breadcrumb filter
     const allMissing = [...pageData.section3_same_paper, ...pageData.section4_diff_paper];
     const same = [];
     const diff = [];
     for (const it of allMissing) {
+        if (!isPaperVisible(it.paper)) continue;  // filtered out by breadcrumb
         if (it.paper && paperSet.has(it.paper)) {
             same.push(it);
         } else {
@@ -241,7 +313,9 @@ function toggleAllSec1(master) {
 }
 
 function buildCSVRows() {
-    const included = pageData.section1_pending.filter(j => !excludedBpros.has(j.bpro));
+    const included = pageData.section1_pending.filter(j =>
+        !excludedBpros.has(j.bpro) && isPaperVisible(j.paper)
+    );
     const planDate = document.getElementById('plan-date').value;
     const header = 'Deckle,BPRO to run,Item (Boards)To Manufacture,IPRO,ITEM CODE,CUSTOMER,Running Name,Item Qty To Mfg.,Remark';
     const lines = [header];
@@ -350,6 +424,9 @@ loadPage();
 .row-excluded { opacity: 0.4; text-decoration: line-through; }
 .group-header.same-paper { background: #d4edda; color: #155724; }
 .group-header.diff-paper { background: #fff3cd; color: #856404; }
+.paper-breadcrumbs { padding: 10px 12px; background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 1rem; }
+.paper-breadcrumbs .bc-chip { margin: 4px 4px 4px 0; }
+.paper-breadcrumbs code { font-size: 0.78rem; }
 </style>
 
 {% endblock %}
